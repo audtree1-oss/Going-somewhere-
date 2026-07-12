@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS poll_votes (
 );
 `);
 
-const CATEGORIES = ['restaurant', 'coffee', 'hotel', 'overlook', 'park', 'museum', 'shopping', 'hiking', 'beach', 'roadside', 'gem', 'gas', 'rest', 'other'];
+const CATEGORIES = ['restaurant', 'coffee', 'hotel', 'overlook', 'park', 'mountains', 'museum', 'shopping', 'hiking', 'beach', 'concert', 'show', 'roadside', 'gem', 'gas', 'rest', 'other'];
 const PRIORITIES = ['must', 'like', 'iftime'];
 const PERMISSIONS = ['edit', 'suggest', 'view'];
 const STATUSES = ['', 'ready', 'here', 'need10', 'hungry', 'bathroom', 'lowenergy', 'quiet', 'skipping', 'gowithout', 'changed'];

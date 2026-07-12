@@ -207,3 +207,13 @@ a { color: var(--teal); }
 
 .leaflet-popup-content { font-size: 13px; }
 .leaflet-popup-content .nm { font-weight: 700; font-size: 14px; }
+
+/* ------- confetti ------- */
+.confetti-bit {
+  position: fixed; top: -40px; z-index: 3000; pointer-events: none;
+  animation: confetti-fall linear forwards;
+}
+@keyframes confetti-fall {
+  0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(105vh) rotate(340deg); opacity: .7; }
+}

@@ -25,8 +25,9 @@ const state = {
 
 const CATEGORY_META = {
   restaurant: ['🍽️', 'Restaurant'], coffee: ['☕', 'Coffee'], hotel: ['🏨', 'Hotel'],
-  overlook: ['🌄', 'Scenic overlook'], park: ['🏞️', 'Park'], museum: ['🏛️', 'Museum'],
-  shopping: ['🛍️', 'Shopping'], hiking: ['🥾', 'Hiking'], beach: ['🏖️', 'Beach'],
+  overlook: ['🌄', 'Scenic overlook'], park: ['🏞️', 'Park'], mountains: ['🏔️', 'Mountains'],
+  museum: ['🏛️', 'Museum'], shopping: ['🛍️', 'Shopping'], hiking: ['🥾', 'Hiking'],
+  beach: ['🏖️', 'Beach'], concert: ['🎸', 'Concert'], show: ['🎭', 'Show'],
   roadside: ['🛸', 'Roadside attraction'], gem: ['💎', 'Hidden gem'], gas: ['⛽', 'Gas'],
   rest: ['🚻', 'Rest stop'], other: ['📍', 'Stop'],
 };
@@ -164,7 +165,8 @@ async function joinPendingCode() {
   localStorage.removeItem('gs_pending_code');
   try {
     const r = await api('/api/join', { method: 'POST', body: { code } });
-    state.notice = r.already ? "You're already on this trip!" : "You're in! Welcome aboard. 🚗";
+    state.notice = r.already ? "You're already on this trip!" : "YOU'RE IN! Welcome aboard!! 🚗💨";
+    if (!r.already) setTimeout(() => confetti(), 400);
     state.tripId = r.trip_id;
   } catch (e) { state.err = e.message; }
 }
@@ -205,7 +207,7 @@ function renderAuth(mode = 'login') {
       <div class="auth-hero">
         <div class="logo">🚗💨</div>
         <h1>Going Somewhere!</h1>
-        <p>Everyone knows the plan. Nobody has to ask.</p>
+        <p>Grab your people. Pack your bags. <strong>GO.</strong></p>
       </div>
       ${state.err ? `<div class="err">${esc(state.err)}</div>` : ''}
       <div class="card">
@@ -256,7 +258,7 @@ async function renderTrips() {
     <div class="screen">
       ${state.notice ? `<div class="notice">${esc(state.notice)}</div>` : ''}
       ${state.err ? `<div class="err">${esc(state.err)}</div>` : ''}
-      <p class="muted" style="margin:4px 2px 14px">Hi ${esc(firstName(state.me.name))}! Where are we headed?</p>
+      <p class="muted" style="margin:4px 2px 14px">Hey ${esc(firstName(state.me.name))}! Where are we going?! 🎉</p>
       <div id="tripList"></div>
       <div class="section-label">Joining someone's trip?</div>
       <div class="card">
@@ -273,8 +275,8 @@ async function renderTrips() {
   if (!state.trips.length) {
     list.innerHTML = `<div class="card" style="text-align:center;padding:30px 16px">
       <div style="font-size:40px">🗺️</div>
-      <h3 style="margin:8px 0 4px">No trips yet</h3>
-      <p class="muted">Tap the + button and let's go somewhere.</p></div>`;
+      <h3 style="margin:8px 0 4px">No trips yet?!</h3>
+      <p class="muted">Unacceptable. Tap the + button and let's fix that immediately.</p></div>`;
   }
   for (const t of state.trips) {
     const cover = t.cover_file ? `style="background-image:url('/covers/${esc(t.cover_file)}')"` : '';
@@ -294,6 +296,7 @@ async function renderTrips() {
     e.preventDefault();
     try {
       const r = await api('/api/join', { method: 'POST', body: { code: new FormData(e.target).get('code') } });
+      if (!r.already) confetti();
       await loadTrips();
       await openTrip(r.trip_id);
     } catch (err) { state.err = err.message; renderTrips(); }
@@ -369,7 +372,8 @@ async function renderToday(c) {
     <div class="today-hero">
       <div class="hello">${hello}, ${esc(firstName(state.me.name))}! ${hour < 12 ? '☀️' : '🌵'}</div>
       <div class="date">${fmtDate(day)}${dayNum > 0 && days.length ? ` · Day ${dayNum} of ${days.length}` : ''}${label !== 'Today' ? ` · ${label}` : ''}</div>
-      ${countdownDays > 0 ? `<div style="margin-top:10px;font-weight:700">🎉 ${countdownDays} day${countdownDays === 1 ? '' : 's'} until we go!</div>` : ''}
+      ${day === t.start_date && today === day ? `<div style="margin-top:10px;font-weight:800;font-size:17px">🎉🎉 IT'S TRIP DAY!! 🎉🎉</div>`
+        : countdownDays > 0 ? `<div style="margin-top:10px;font-weight:700">🔥 ${countdownDays} day${countdownDays === 1 ? '' : 's'} until takeoff — get hyped!</div>` : ''}
       <div class="today-stats" id="todayStats"></div>
     </div>
     <div id="todayBody"></div>
@@ -1142,23 +1146,23 @@ function tripModal(t = null) {
     <h2>${isNew ? 'New trip 🚗' : 'Edit trip'}</h2>
     <div id="mErr"></div>
     <form id="tripForm">
-      <div class="field"><label>Trip name</label><input name="name" placeholder="Route 66 with Mom" value="${esc(t?.name || '')}" required></div>
+      <div class="field"><label>Trip name</label><input name="name" placeholder="The trip of the century" value="${esc(t?.name || '')}" required></div>
       <div class="field-row">
         <div class="field"><label>Starts</label><input name="start_date" type="date" value="${esc(t?.start_date || '')}"></div>
         <div class="field"><label>Ends</label><input name="end_date" type="date" value="${esc(t?.end_date || '')}"></div>
       </div>
       <div class="field"><label>Cover emoji</label>
-        <div class="quiz-opts" id="emojiPick">${['🚗', '🏜️', '🏔️', '🏖️', '🎢', '🍷', '🎄', '🗽', '🌲', '🛣️'].map((e) =>
+        <div class="quiz-opts" id="emojiPick">${['🚗', '🎸', '🎤', '🎭', '⛰️', '🏔️', '🏜️', '🏖️', '🎢', '🍷', '🎄', '🗽', '🌲', '🛣️'].map((e) =>
           `<button type="button" data-e="${e}" class="${(t?.cover_emoji || '🚗') === e ? 'on' : ''}" style="font-size:19px">${e}</button>`).join('')}</div>
         <input type="hidden" name="cover_emoji" value="${esc(t?.cover_emoji || '🚗')}"></div>
       <div class="field"><label>Trip vibe (optional)</label>
         <select name="vibe">
           <option value="">Pick a vibe…</option>
-          ${['🌵 Route 66 Adventure', '🏞️ National Parks', '🍷 Wine Weekend', '🏖️ Beach Escape', '🎢 Theme Park', '🎄 Christmas Markets', '🎨 Arts & Culture', '🍔 Food Tour']
+          ${['⛰️ Adventure', '🎸 Concerts & Live Music', '🎭 Shows & Theater', '🏞️ National Parks', '🍷 Wine Weekend', '🏖️ Beach Escape', '🎢 Theme Park', '🎄 Christmas Markets', '🎨 Arts & Culture', '🍔 Food Tour']
             .map((v) => `<option ${t?.vibe === v ? 'selected' : ''}>${v}</option>`).join('')}
         </select></div>
       ${!isNew ? `<div class="field"><label>Cover photo</label><input type="file" name="photo" accept="image/*"></div>` : ''}
-      <button class="btn full" type="submit">${isNew ? "Let's go!" : 'Save'}</button>
+      <button class="btn full" type="submit">${isNew ? "LET'S GOOO! 🚗💨" : 'Save'}</button>
       ${!isNew ? '<button class="btn danger full" type="button" id="delTrip" style="margin-top:8px">Delete trip</button>' : ''}
     </form>`);
   modal.querySelectorAll('#emojiPick button').forEach((b) => {
@@ -1179,6 +1183,7 @@ function tripModal(t = null) {
       if (isNew) {
         const r = await api('/api/trips', { method: 'POST', body });
         closeModal();
+        confetti();
         await loadTrips();
         await openTrip(r.id);
       } else {
@@ -1203,6 +1208,23 @@ function tripModal(t = null) {
     await loadTrips();
     renderTrips();
   };
+}
+
+// ---------------------------------------------------------------------------
+// Confetti — because starting a trip should FEEL like starting a trip
+// ---------------------------------------------------------------------------
+function confetti(emojis = ['🎉', '🚗', '✨', '🎊', '🌟', '💛']) {
+  for (let i = 0; i < 26; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-bit';
+    p.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+    p.style.left = Math.random() * 100 + 'vw';
+    p.style.animationDelay = Math.random() * 0.6 + 's';
+    p.style.animationDuration = 1.6 + Math.random() * 1.4 + 's';
+    p.style.fontSize = 16 + Math.random() * 18 + 'px';
+    document.body.appendChild(p);
+    setTimeout(() => p.remove(), 3800);
+  }
 }
 
 // ---------------------------------------------------------------------------
