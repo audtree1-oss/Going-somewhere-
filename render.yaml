@@ -1,0 +1,24 @@
+# Render blueprint for Going Somewhere! — Node/Express + SQLite on a
+# persistent disk. Same proven architecture as Erica HQ / Life Wrangler.
+services:
+  - type: web
+    name: going-somewhere
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    disk:
+      name: going-somewhere-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATA_DIR
+        value: /data
+      # Powers the AI trip assistant ("find stops between Kingman and
+      # Flagstaff"). The app works without it — the assistant just
+      # explains it needs a key.
+      - key: ANTHROPIC_API_KEY
+        sync: false

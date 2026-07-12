@@ -1,0 +1,19 @@
+{
+  "name": "going-somewhere",
+  "version": "0.1.0",
+  "description": "Going Somewhere! — the app that runs the trip, not just plans it. Every traveler knows what's happening, where to be, and when to be ready.",
+  "private": true,
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "multer": "^2.0.1"
+  }
+}
