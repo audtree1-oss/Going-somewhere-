@@ -50,9 +50,9 @@ cover photo.
 
 ---
 
-## The five tabs
+## The six tabs
 
-Every trip has five tabs along the bottom:
+Every trip has six tabs along the bottom:
 
 ### 🌞 Today — the heart of the whole app
 
@@ -68,6 +68,15 @@ Open the app on a trip day and this screen tells you everything:
 - **Tonight's hotel** — address, check-in time, confirmation number,
   Wi-Fi password, parking notes
 - **"If we have time"** — your wishlist ideas, waiting for a free hour
+- **🎒 Pack for today** — a short list built automatically from the
+  day's stops and weather: hiking day → hiking shoes and water; concert
+  night → tickets and a charged phone; rain coming → umbrella; new
+  hotel tonight → "pack up the room!"
+- **⭑ UP NEXT** — on trip days, the next stop on the timeline is
+  highlighted so one glance answers "what's next?"
+- **"Who's ready?"** — a ✅ 3/6 counter right in the header
+- **"Did anything change?"** — if the plan changed since you last
+  opened the app, a banner tells you so you're never caught off guard
 
 Before the trip starts, this screen shows a countdown. On the first
 morning it announces **IT'S TRIP DAY!!** — because it is.
@@ -108,6 +117,16 @@ going and what time do I need to be ready?"*
 Every pinned stop on an interactive map, with a colored driving route,
 total drive time, and mileage. Filter by day or view the whole trip.
 Tap any pin for details and a directions link.
+
+### 📸 Feed — the Family Feed
+
+A private timeline for the trip. *"Mom found the world's largest
+pistachio."* *"Charles accidentally ordered six tacos."* *"This pie is
+worth driving 50 miles for."* Post a moment (with or without a photo),
+heart each other's posts, and build the trip's story as it happens.
+It's not social media — nobody outside the trip ever sees it, and it
+exports with the rest of your trip data. When the memory-book feature
+arrives, these moments become its raw material.
 
 ### 👥 People — this is the special sauce
 
@@ -214,13 +233,26 @@ itself automatically when it does.
 
 ---
 
+## The Trip Brain 🧠
+
+On your trips home screen there's a **Trip Brain** card. The app
+quietly notices your travel style from your *real* trips — not generic
+travel tips: your favorite kinds of stops, how packed your days run,
+whether coffee is non-negotiable, how decisively you mark must-dos.
+Tap "What has it noticed?" and it tells you. It gets sharper with
+every trip, stop, vote, and Feed post — and if the AI key is on, its
+observations get extra witty.
+
+---
+
 ## What's coming (the roadmap teaser)
 
 - **Discovery mode** — "psst, that garden you saved is 4 minutes away
   and you've got an hour to kill"
 - **Dessert First** 🍰 — one delightful, low-disruption wildcard, on tap
-- **Budget tracker & packing lists**
-- **Trip journal → automatic memory book** when the trip ends
+- **Budget tracker & full packing lists**
+- **Automatic memory book** — the Family Feed + your route + ratings,
+  woven into a keepsake when the trip ends
 - **Change of Plans mode** — when weather or life wrecks the day:
   Keep the plan / Swap the plan / Split and rejoin
 - **School Trip Mode** — pods, headcounts, chaperone alerts (the

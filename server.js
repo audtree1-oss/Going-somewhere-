@@ -113,6 +113,20 @@ CREATE TABLE IF NOT EXISTS poll_votes (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(poll_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS trip_posts (
+  id INTEGER PRIMARY KEY,
+  trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL DEFAULT '',
+  photo TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS post_hearts (
+  id INTEGER PRIMARY KEY,
+  post_id INTEGER NOT NULL REFERENCES trip_posts(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE(post_id, user_id)
+);
 `);
 
 const CATEGORIES = ['restaurant', 'coffee', 'hotel', 'overlook', 'park', 'mountains', 'museum', 'shopping', 'hiking', 'beach', 'concert', 'show', 'roadside', 'gem', 'gas', 'rest', 'other'];
@@ -687,6 +701,106 @@ Give 3-6 suggestions. Real places only; if unsure a place exists, prefer well-kn
 });
 
 // ---------------------------------------------------------------------------
+// The Family Feed — a private timeline of little moments, per trip
+// ---------------------------------------------------------------------------
+app.get('/api/trips/:id/posts', (req, res) => {
+  const m = requireMember(req, res); if (!m) return;
+  const posts = db.prepare(`
+    SELECT p.*, u.name AS author,
+      (SELECT COUNT(*) FROM post_hearts h WHERE h.post_id = p.id) AS hearts,
+      EXISTS(SELECT 1 FROM post_hearts h WHERE h.post_id = p.id AND h.user_id = ?) AS hearted
+    FROM trip_posts p JOIN users u ON u.id = p.user_id
+    WHERE p.trip_id = ? ORDER BY p.id DESC LIMIT 200`).all(req.user.id, req.params.id);
+  res.json({ posts });
+});
+
+app.post('/api/trips/:id/posts', upload.single('photo'), (req, res) => {
+  const m = requireMember(req, res); if (!m) return;
+  const body = String((req.body || {}).body || '').trim().slice(0, 2000);
+  if (!body && !req.file) return res.status(400).json({ error: 'Say something or add a photo!' });
+  const info = db.prepare('INSERT INTO trip_posts (trip_id, user_id, body, photo) VALUES (?, ?, ?, ?)')
+    .run(req.params.id, req.user.id, body, req.file ? req.file.filename : '');
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+app.post('/api/posts/:postId/heart', (req, res) => {
+  const post = db.prepare('SELECT * FROM trip_posts WHERE id = ?').get(req.params.postId);
+  if (!post) return res.status(404).json({ error: 'Post not found.' });
+  if (!memberOf(post.trip_id, req.user.id)) return res.status(403).json({ error: 'You are not on this trip.' });
+  const existing = db.prepare('SELECT id FROM post_hearts WHERE post_id = ? AND user_id = ?').get(post.id, req.user.id);
+  if (existing) db.prepare('DELETE FROM post_hearts WHERE id = ?').run(existing.id);
+  else db.prepare('INSERT INTO post_hearts (post_id, user_id) VALUES (?, ?)').run(post.id, req.user.id);
+  res.json({ ok: true, hearted: !existing });
+});
+
+app.delete('/api/posts/:postId', (req, res) => {
+  const post = db.prepare('SELECT * FROM trip_posts WHERE id = ?').get(req.params.postId);
+  if (!post) return res.status(404).json({ error: 'Post not found.' });
+  const m = memberOf(post.trip_id, req.user.id);
+  if (!m || (post.user_id !== req.user.id && m.role !== 'captain')) {
+    return res.status(403).json({ error: 'You can only delete your own posts.' });
+  }
+  if (post.photo) fs.unlink(path.join(UPLOAD_DIR, post.photo), () => {});
+  db.prepare('DELETE FROM trip_posts WHERE id = ?').run(post.id);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Trip Brain — the app notices your travel style from real data.
+// Honest heuristics first; AI polish when a key is set.
+// ---------------------------------------------------------------------------
+app.get('/api/me/brain', async (req, res) => {
+  const tripIds = db.prepare('SELECT trip_id FROM trip_members WHERE user_id = ?').all(req.user.id).map((r) => r.trip_id);
+  if (!tripIds.length) return res.json({ insights: ["No trips yet — the Trip Brain learns as you travel. Go make some data! 🚗"] });
+  const ph = tripIds.map(() => '?').join(',');
+  const stops = db.prepare(`SELECT category, priority, visit_min, day_date, arrive FROM stops WHERE trip_id IN (${ph}) AND state = 'active'`).all(...tripIds);
+  const postCount = db.prepare(`SELECT COUNT(*) AS n FROM trip_posts WHERE trip_id IN (${ph})`).get(...tripIds).n;
+  const pollCount = db.prepare(`SELECT COUNT(*) AS n FROM polls WHERE trip_id IN (${ph})`).get(...tripIds).n;
+
+  const insights = [];
+  const byCat = {};
+  for (const s of stops) byCat[s.category] = (byCat[s.category] || 0) + 1;
+  const ranked = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const catLabel = { restaurant: 'restaurants 🍽️', coffee: 'coffee stops ☕', hotel: 'hotels 🏨', overlook: 'scenic overlooks 🌄', park: 'parks 🏞️', mountains: 'mountains 🏔️', museum: 'museums 🏛️', shopping: 'shopping 🛍️', hiking: 'hikes 🥾', beach: 'beaches 🏖️', concert: 'concerts 🎸', show: 'shows 🎭', roadside: 'roadside attractions 🛸', gem: 'hidden gems 💎', gas: 'gas stops ⛽', rest: 'rest stops 🚻', other: 'stops 📍' };
+
+  if (ranked.length && ranked[0][1] >= 2) insights.push(`Your #1 stop type is ${catLabel[ranked[0][0]] || ranked[0][0]} — ${ranked[0][1]} planned so far. The Brain sees you.`);
+  if (byCat.coffee) {
+    const days = new Set(stops.filter((s) => s.day_date).map((s) => s.day_date)).size || 1;
+    if (byCat.coffee / days >= 0.5) insights.push(`Coffee appears on most of your travel days. The Brain will never schedule a morning without it. ☕`);
+  }
+  const mustRatio = stops.length ? stops.filter((s) => s.priority === 'must').length / stops.length : 0;
+  if (mustRatio >= 0.4) insights.push(`${Math.round(mustRatio * 100)}% of your stops are marked must-do. You travel with conviction. ⭐`);
+  else if (stops.length >= 5 && mustRatio <= 0.15) insights.push(`You keep must-dos rare (${Math.round(mustRatio * 100)}%) — a go-with-the-flow crew. The Brain respects it. 🌊`);
+  const dayCounts = {};
+  for (const s of stops) if (s.day_date) dayCounts[s.day_date] = (dayCounts[s.day_date] || 0) + 1;
+  const dayVals = Object.values(dayCounts);
+  if (dayVals.length >= 2) {
+    const avg = Math.round((dayVals.reduce((a, b) => a + b, 0) / dayVals.length) * 10) / 10;
+    insights.push(avg >= 4 ? `You average ${avg} stops a day — packed itineraries are your love language. 🔥`
+      : `You average ${avg} stops a day — you build in breathing room. Smart. 🧘`);
+  }
+  const earliest = stops.filter((s) => s.arrive).map((s) => s.arrive).sort()[0];
+  if (earliest) insights.push(earliest < '09:00' ? `Earliest planned start: ${earliest}. Certified early birds. 🌅` : `Your days start at a civilized hour (earliest: ${earliest}). No alarm-clock vacations here. 😌`);
+  if (postCount >= 5) insights.push(`${postCount} moments in your Family Feeds — this crew documents the journey. 📸`);
+  if (pollCount >= 3) insights.push(`${pollCount} group votes so far. Democracy rides shotgun. 🗳️`);
+  if (insights.length < 2) insights.push('The Brain gets smarter with every stop, vote, and post you add. Keep traveling. 🧠');
+
+  // AI polish: turn the raw stats into sharper observations when available
+  if (ANTHROPIC_API_KEY && stops.length >= 5) {
+    const raw = await askClaude(
+      `You are the "Trip Brain" inside a group road-trip app. Given travel-pattern stats, write 3-4 short,
+warm, funny observations about this traveler's style (second person). Each under 20 words. Respond ONLY
+with a JSON array of strings. No advice, just observations that make them feel seen.`,
+      `Stats: ${JSON.stringify({ stopsByCategory: byCat, mustDoRatio: mustRatio, avgStopsPerDay: dayVals.length ? dayVals.reduce((a, b) => a + b, 0) / dayVals.length : null, earliestStart: earliest, feedPosts: postCount, votes: pollCount })}`,
+      600
+    );
+    const ai = safeParse(raw, null);
+    if (Array.isArray(ai) && ai.length) return res.json({ insights: ai.map((s) => String(s)).slice(0, 4), source: 'ai' });
+  }
+  res.json({ insights: insights.slice(0, 5), source: 'heuristic' });
+});
+
+// ---------------------------------------------------------------------------
 // Export (their data is theirs)
 // ---------------------------------------------------------------------------
 app.get('/api/trips/:id/export', (req, res) => {
@@ -694,8 +808,9 @@ app.get('/api/trips/:id/export', (req, res) => {
   const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id);
   const stops = db.prepare('SELECT * FROM stops WHERE trip_id = ? ORDER BY day_date, position').all(trip.id);
   const members = db.prepare('SELECT u.name, m.role FROM trip_members m JOIN users u ON u.id = m.user_id WHERE m.trip_id = ?').all(trip.id);
+  const posts = db.prepare('SELECT p.body, p.created_at, u.name AS author FROM trip_posts p JOIN users u ON u.id = p.user_id WHERE p.trip_id = ? ORDER BY p.id').all(trip.id);
   res.setHeader('Content-Disposition', `attachment; filename="${trip.name.replace(/[^\w -]/g, '_')}.json"`);
-  res.json({ trip, stops, members, exported_at: new Date().toISOString() });
+  res.json({ trip, stops, members, feed: posts, exported_at: new Date().toISOString() });
 });
 
 // ---------------------------------------------------------------------------

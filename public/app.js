@@ -260,6 +260,12 @@ async function renderTrips() {
       ${state.err ? `<div class="err">${esc(state.err)}</div>` : ''}
       <p class="muted" style="margin:4px 2px 14px">Hey ${esc(firstName(state.me.name))}! Where are we going?! 🎉</p>
       <div id="tripList"></div>
+      ${state.trips.length ? `
+      <div class="section-label">🧠 Trip Brain</div>
+      <div class="card">
+        <p class="muted small" style="margin-bottom:8px">The app quietly learns your travel style from real trips — not generic tips.</p>
+        <button class="btn ghost full" id="brainBtn">What has it noticed?</button>
+      </div>` : ''}
       <div class="section-label">Joining someone's trip?</div>
       <div class="card">
         <form id="joinForm" class="row">
@@ -291,6 +297,16 @@ async function renderTrips() {
     list.appendChild(card);
   }
   document.getElementById('newTripBtn').onclick = () => tripModal();
+  const brainBtn = document.getElementById('brainBtn');
+  if (brainBtn) brainBtn.onclick = async () => {
+    const modal = openModal('<h2>🧠 Trip Brain</h2><div id="brainOut" class="muted">Thinking about your travels…</div>');
+    try {
+      const { insights } = await api('/api/me/brain');
+      modal.querySelector('#brainOut').outerHTML = insights.map((i) =>
+        `<div class="card"><p>${esc(i)}</p></div>`).join('') +
+        '<p class="muted small" style="text-align:center">The Brain gets sharper with every trip, stop, vote, and post.</p>';
+    } catch (e) { modal.querySelector('#brainOut').textContent = e.message; }
+  };
   document.getElementById('logoutBtn').onclick = async () => { await api('/api/logout', { method: 'POST' }); state.me = null; renderAuth(); };
   document.getElementById('joinForm').onsubmit = async (e) => {
     e.preventDefault();
@@ -327,7 +343,7 @@ function renderTrip() {
     </div>
     <div class="${state.tab === 'map' ? 'screen no-pad' : 'screen'}" id="tabContent"></div>
     <nav class="tabbar">
-      ${[['today', '🌞', 'Today'], ['plan', '🗓️', 'Plan'], ['map', '🗺️', 'Map'], ['people', '👥', 'People'], ['decide', '🗳️', 'Decide']]
+      ${[['today', '🌞', 'Today'], ['plan', '🗓️', 'Plan'], ['map', '🗺️', 'Map'], ['feed', '📸', 'Feed'], ['people', '👥', 'People'], ['decide', '🗳️', 'Decide']]
         .map(([k, i, l]) => `<button data-tab="${k}" class="${state.tab === k ? 'active' : ''}"><span class="ico">${i}</span>${l}</button>`).join('')}
     </nav>`;
   document.getElementById('backBtn').onclick = async () => { state.trip = null; state.tripId = null; await loadTrips(); renderTrips(); };
@@ -339,6 +355,7 @@ function renderTrip() {
   if (state.tab === 'today') renderToday(c);
   else if (state.tab === 'plan') renderPlan(c);
   else if (state.tab === 'map') renderMap(c);
+  else if (state.tab === 'feed') renderFeed(c);
   else if (state.tab === 'people') renderPeople(c);
   else if (state.tab === 'decide') renderDecide(c);
   if (state.momMode) renderMomMode();
@@ -382,13 +399,26 @@ async function renderToday(c) {
   document.getElementById('momBtn').onclick = () => { state.momMode = { day, stops }; renderMomMode(); };
 
   const body = document.getElementById('todayBody');
+
+  // "Is anything different from yesterday?" — changes since you last looked
+  const seenKey = `gs_seen_${t.id}`;
+  const lastSeen = localStorage.getItem(seenKey) || '';
+  const changed = lastSeen
+    ? (state.trip.stops || []).filter((s) => s.state === 'active' && (s.updated_at > lastSeen || s.created_at > lastSeen)).length
+    : 0;
+  localStorage.setItem(seenKey, new Date().toISOString().slice(0, 19).replace('T', ' '));
+  if (changed > 0) {
+    body.insertAdjacentHTML('beforeend',
+      `<div class="notice">🔄 ${changed} thing${changed === 1 ? '' : 's'} in the plan changed since you last looked — the timeline below is current.</div>`);
+  }
+
   if (!stops.length) {
-    body.innerHTML = `<div class="card" style="text-align:center;padding:26px">
+    body.insertAdjacentHTML('beforeend', `<div class="card" style="text-align:center;padding:26px">
       <div style="font-size:36px">🧭</div>
       <h3 style="margin:6px 0 4px">Nothing planned for this day yet</h3>
-      <p class="muted">Head to the Plan tab to add stops — they'll show up here as a timeline.</p></div>`;
+      <p class="muted">Head to the Plan tab to add stops — they'll show up here as a timeline.</p></div>`);
   } else {
-    body.innerHTML = `<div class="section-label">The plan</div><div class="timeline" id="tl"></div>`;
+    body.insertAdjacentHTML('beforeend', `<div id="packCard"></div><div class="section-label">The plan</div><div class="timeline" id="tl"></div>`);
   }
 
   // Route legs between today's geo stops
@@ -413,8 +443,14 @@ async function renderToday(c) {
     stats.push([`${route.distance_mi} mi`, 'distance']);
   }
   stats.push([`${stops.length}`, stops.length === 1 ? 'stop' : 'stops']);
+  const members = state.trip.members || [];
+  if (members.length > 1) {
+    const ready = members.filter((m) => m.status === 'ready' || m.status === 'here').length;
+    stats.push([`✅ ${ready}/${members.length}`, 'ready']);
+  }
 
   // Weather
+  let wx = null;
   const wxStop = geoStops[0] || (hotelTonight && hotelTonight.lat != null ? hotelTonight : null);
   if (wxStop) {
     try {
@@ -422,10 +458,14 @@ async function renderToday(c) {
       if (weather && weather.daily) {
         const idx = weather.daily.time.indexOf(day);
         if (idx >= 0) {
-          stats.unshift([`${weatherEmoji(weather.daily.weather_code[idx])} ${Math.round(weather.daily.temperature_2m_max[idx])}°`, 'high today']);
-          if (weather.daily.precipitation_probability_max[idx] >= 40) {
-            stats.push([`💧 ${weather.daily.precipitation_probability_max[idx]}%`, 'rain chance']);
-          }
+          wx = {
+            code: weather.daily.weather_code[idx],
+            hi: Math.round(weather.daily.temperature_2m_max[idx]),
+            lo: Math.round(weather.daily.temperature_2m_min[idx]),
+            rain: weather.daily.precipitation_probability_max[idx],
+          };
+          stats.unshift([`${weatherEmoji(wx.code)} ${wx.hi}°`, 'high today']);
+          if (wx.rain >= 40) stats.push([`💧 ${wx.rain}%`, 'rain chance']);
         }
       }
     } catch { /* weather is a nicety */ }
@@ -433,17 +473,35 @@ async function renderToday(c) {
   document.getElementById('todayStats').innerHTML =
     stats.map(([v, k]) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
 
-  // Timeline
+  // 🎒 Pack for Today — generated from the day's stops + weather
+  const packCard = document.getElementById('packCard');
+  if (packCard && stops.length) {
+    const items = packListFor(stops, wx, route);
+    if (items.length) {
+      packCard.innerHTML = `<div class="section-label">🎒 Pack for today</div>
+        <div class="card"><div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 10px">
+          ${items.map((i) => `<span class="small">${i}</span>`).join('')}
+        </div></div>`;
+    }
+  }
+
+  // Timeline — with "what's next" highlighted when it's actually today
   if (stops.length) {
     const tl = document.getElementById('tl');
+    const nowHM = `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`;
+    const nextStop = day === today
+      ? stops.find((s) => (s.depart || s.arrive) && (s.depart || s.arrive) >= nowHM) || null
+      : null;
     let legIdx = 0;
     stops.forEach((s, i) => {
       const isLast = i === stops.length - 1;
+      const isNext = nextStop && s.id === nextStop.id;
       const timeBits = [s.arrive && fmtTime(s.arrive), s.depart && `until ${fmtTime(s.depart)}`].filter(Boolean).join(' ');
       const node = el(`<div class="tl-stop">
-        <div class="tl-rail"><div class="tl-dot">${catIco(s.category)}</div>${isLast ? '' : '<div class="tl-line"></div>'}</div>
+        <div class="tl-rail"><div class="tl-dot" ${isNext ? 'style="background:var(--orange);"' : ''}>${catIco(s.category)}</div>${isLast ? '' : '<div class="tl-line"></div>'}</div>
         <div class="tl-body">
-          <div class="card" style="margin-bottom:0">
+          <div class="card" style="margin-bottom:0${isNext ? ';border:2px solid var(--orange)' : ''}">
+            ${isNext ? '<div class="small" style="color:var(--orange);font-weight:800;letter-spacing:.05em">⭑ UP NEXT</div>' : ''}
             <div class="spread"><strong>${esc(s.name)}</strong>${s.priority === 'must' ? '<span class="pill must">must-do</span>' : s.priority === 'iftime' ? '<span class="pill iftime">if we have time</span>' : ''}</div>
             ${timeBits ? `<div class="muted">${timeBits}${s.visit_min ? ` · ~${s.visit_min} min` : ''}</div>` : ''}
             ${s.address ? `<div class="muted small">📍 ${esc(s.address)} ${s.lat != null ? `· <a href="https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}" target="_blank" rel="noopener">directions</a>` : ''}</div>` : ''}
@@ -485,6 +543,29 @@ async function renderToday(c) {
         ${wishlist.slice(0, 4).map((s) => `<div class="row" style="padding:4px 0">${catIco(s.category)} <span class="grow">${esc(s.name)}</span></div>`).join('')}
       </div>`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 🎒 Pack for Today — rules over the day's stops + weather
+// ---------------------------------------------------------------------------
+function packListFor(stops, wx, route) {
+  const items = new Set();
+  const cats = new Set(stops.map((s) => s.category));
+  if (cats.has('hiking')) { items.add('🥾 Hiking shoes'); items.add('💧 Water bottle'); }
+  if (cats.has('mountains') || cats.has('overlook')) { items.add('💧 Water bottle'); items.add('📸 Camera / charged phone'); }
+  if (cats.has('beach')) { items.add('🩴 Sandals & towel'); items.add('🧴 Sunscreen'); }
+  if (cats.has('park')) items.add('💧 Water bottle');
+  if (cats.has('concert') || cats.has('show')) { items.add('🎟️ Tickets'); items.add('🔋 Charged phone'); }
+  if (cats.has('museum')) items.add('🎟️ Tickets / passes');
+  if (wx) {
+    if (wx.hi >= 80) { items.add('🧴 Sunscreen'); items.add('💧 Water bottle'); }
+    if (wx.hi >= 90) items.add('🧢 Hat');
+    if (wx.lo <= 55) items.add('🧥 Jacket for the evening');
+    if (wx.rain >= 40) items.add('🌂 Rain jacket / umbrella');
+  }
+  if (route && route.duration_min >= 120) items.add('🎧 Road snacks & playlist');
+  if (cats.has('hotel')) items.add('🧳 Pack up — new hotel tonight!');
+  return [...items].slice(0, 8);
 }
 
 // ---------------------------------------------------------------------------
@@ -856,6 +937,82 @@ async function renderMap(c) {
           `🚗 ${h ? h + 'h ' : ''}${m}m driving · ${r.distance_mi} miles across ${routeStops.length} stops`;
       }
     } catch { /* map still useful without the line */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FEED — the Family Feed: a private timeline of little moments
+// ---------------------------------------------------------------------------
+async function renderFeed(c) {
+  c.innerHTML = `
+    ${state.notice ? `<div class="notice">${esc(state.notice)}</div>` : ''}
+    <div class="card">
+      <h3>📸 The Family Feed</h3>
+      <p class="muted small" style="margin-bottom:10px">Little moments, big pie, six accidental tacos. Private to this trip — and it all becomes the trip's story.</p>
+      <form id="postForm">
+        <div class="field"><textarea name="body" placeholder="Mom found the world's largest pistachio…" style="min-height:56px"></textarea></div>
+        <div class="row">
+          <input type="file" name="photo" accept="image/*" class="grow" style="font-size:13px">
+          <button class="btn sm" type="submit">Post it!</button>
+        </div>
+      </form>
+    </div>
+    <div id="feedList"><p class="muted" style="text-align:center;padding:10px">Loading the good stuff…</p></div>`;
+  state.notice = '';
+
+  document.getElementById('postForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = new FormData();
+    fd.append('body', form.body.value);
+    if (form.photo.files[0]) fd.append('photo', form.photo.files[0]);
+    try {
+      await api(`/api/trips/${state.tripId}/posts`, { method: 'POST', body: fd });
+      state.notice = 'Posted! 📸';
+      renderTrip();
+    } catch (err) { alert(err.message); }
+  };
+
+  try {
+    const { posts } = await api(`/api/trips/${state.tripId}/posts`);
+    const list = document.getElementById('feedList');
+    if (!posts.length) {
+      list.innerHTML = `<div class="card" style="text-align:center;padding:24px">
+        <div style="font-size:36px">🌵</div>
+        <p class="muted" style="margin-top:6px">Nothing here yet. First funny thing that happens — post it.</p></div>`;
+      return;
+    }
+    list.innerHTML = '';
+    const isCaptain = state.trip.me.role === 'captain';
+    posts.forEach((p) => {
+      const card = el(`<div class="card">
+        <div class="row" style="margin-bottom:6px">
+          <div class="avatar">${esc(firstName(p.author)[0] || '?')}</div>
+          <div class="grow"><strong>${esc(firstName(p.author))}</strong><div class="muted small">${timeAgo(p.created_at)}</div></div>
+          ${p.user_id === state.me.id || isCaptain ? '<button data-del class="muted" style="font-size:15px">✕</button>' : ''}
+        </div>
+        ${p.body ? `<p style="margin-bottom:${p.photo ? '8px' : '4px'}">${esc(p.body)}</p>` : ''}
+        ${p.photo ? `<img src="/covers/${esc(p.photo)}" alt="" style="width:100%;border-radius:12px;margin-bottom:6px">` : ''}
+        <button data-heart style="font-size:14px;font-weight:700;color:${p.hearted ? 'var(--bad)' : 'var(--ink-soft)'}">
+          ${p.hearted ? '❤️' : '🤍'} ${p.hearts || ''}</button>
+      </div>`);
+      card.querySelector('[data-heart]').onclick = async (ev) => {
+        const r = await api(`/api/posts/${p.id}/heart`, { method: 'POST' });
+        p.hearts += r.hearted ? 1 : -1;
+        p.hearted = r.hearted ? 1 : 0;
+        ev.target.style.color = p.hearted ? 'var(--bad)' : 'var(--ink-soft)';
+        ev.target.innerHTML = `${p.hearted ? '❤️' : '🤍'} ${p.hearts || ''}`;
+      };
+      const del = card.querySelector('[data-del]');
+      if (del) del.onclick = async () => {
+        if (!confirm('Delete this post?')) return;
+        await api(`/api/posts/${p.id}`, { method: 'DELETE' });
+        card.remove();
+      };
+      list.appendChild(card);
+    });
+  } catch (e) {
+    document.getElementById('feedList').innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
 }
 

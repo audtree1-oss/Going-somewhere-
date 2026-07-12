@@ -43,6 +43,14 @@ knows what's happening, where to be, and when to be ready.
 - **✨ AI trip assistant** — "find attractions between Kingman and
   Flagstaff" → real suggestions you can add to the wishlist in one tap
   (needs `ANTHROPIC_API_KEY`; everything else works without it).
+- **📸 The Family Feed** — a private per-trip timeline of little moments
+  (photos, one-liners, hearts). Not social media: nobody outside the
+  trip sees it, and it exports with your data.
+- **🎒 Pack for Today** — auto-generated each morning from the day's
+  stops and weather (hiking → boots & water, rain → umbrella, new
+  hotel → pack up the room).
+- **🧠 Trip Brain** — learns your travel style from real trips: favorite
+  stop types, day density, coffee dependence, must-do decisiveness.
 - **Export** any trip as JSON. Your data is yours.
 
 ## Architecture
