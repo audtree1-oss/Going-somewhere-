@@ -50,7 +50,14 @@ knows what's happening, where to be, and when to be ready.
   stops and weather (hiking → boots & water, rain → umbrella, new
   hotel → pack up the room).
 - **🧠 Trip Brain** — learns your travel style from real trips: favorite
-  stop types, day density, coffee dependence, must-do decisiveness.
+  stop types, day density, coffee dependence, must-do decisiveness,
+  how often stops earn a "would go again."
+- **💵 Budget tracker** — total budget, expenses by category, spent /
+  remaining / per-traveler math, "where it went" breakdown.
+- **⭐ Worth it?** — three-tap post-visit ratings (money / time / again):
+  family travel history, not anonymous reviews. Feeds the Brain.
+- **🍰 Dessert First** — one delightful, low-disruption wildcard pulled
+  from the wishlist. It never wrecks the day.
 - **Export** any trip as JSON. Your data is yours.
 
 ## Architecture

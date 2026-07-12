@@ -394,9 +394,12 @@ async function renderToday(c) {
       <div class="today-stats" id="todayStats"></div>
     </div>
     <div id="todayBody"></div>
-    <button class="btn ghost full" id="momBtn" style="margin-top:6px">🔎 Big &amp; Simple view</button>`;
+    <button class="btn ghost full" id="momBtn" style="margin-top:6px">🔎 Big &amp; Simple view</button>
+    <button class="btn full" id="dessertBtn" style="margin-top:8px;background:linear-gradient(120deg,var(--orange),#d4548a)">🍰 Dessert First</button>
+    <p class="muted small" style="text-align:center;margin-top:6px">One delightful little wildcard. It never wrecks the day.</p>`;
 
   document.getElementById('momBtn').onclick = () => { state.momMode = { day, stops }; renderMomMode(); };
+  document.getElementById('dessertBtn').onclick = () => dessertFirst(day);
 
   const body = document.getElementById('todayBody');
 
@@ -569,6 +572,50 @@ function packListFor(stops, wx, route) {
 }
 
 // ---------------------------------------------------------------------------
+// 🍰 Dessert First — one delightful, low-disruption wildcard.
+// Keely's dad taught her to always eat dessert first, in case the
+// commies attack. This button honors that doctrine.
+// ---------------------------------------------------------------------------
+function dessertFirst(day) {
+  const candidates = (state.trip.stops || []).filter((s) =>
+    s.state === 'active' && (!s.day_date || (s.priority === 'iftime' && s.day_date !== day)));
+  if (!candidates.length) {
+    openModal(`<h2>🍰 Dessert First</h2>
+      <div class="card" style="text-align:center;padding:24px">
+        <div style="font-size:36px">🧺</div>
+        <p style="margin-top:8px">The wishlist is empty — nothing to surprise you with!</p>
+        <p class="muted small" style="margin-top:6px">Add "if we have time" finds to the Plan tab (or ask the ✨ assistant for hidden gems) and Dessert First will have treats to offer.</p>
+      </div>`);
+    return;
+  }
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  const canEditTrip = state.trip.me.role === 'captain' || state.trip.me.permission === 'edit';
+  const modal = openModal(`<h2>🍰 Dessert First</h2>
+    <p class="muted" style="margin-bottom:10px">There's room for one little adventure. Take it?</p>
+    <div class="card" style="border:2px solid var(--orange)">
+      <div class="row"><span style="font-size:30px">${catIco(pick.category)}</span>
+        <div class="grow"><strong style="font-size:17px">${esc(pick.name)}</strong>
+          ${pick.address ? `<div class="muted small">📍 ${esc(pick.address)}</div>` : ''}
+        </div></div>
+      ${pick.notes ? `<p class="small" style="margin-top:6px">${esc(pick.notes)}</p>` : ''}
+    </div>
+    ${canEditTrip ? '<button class="btn full" id="takeIt">TAKE IT! Add to today 🎉</button>' : '<p class="muted small">Ask a captain to add it to the day!</p>'}
+    <div class="row" style="margin-top:8px">
+      <button class="btn quiet grow" id="another">🎲 Another one</button>
+      <button class="btn quiet grow" id="notToday">Not today</button>
+    </div>`);
+  const take = modal.querySelector('#takeIt');
+  if (take) take.onclick = async () => {
+    await api(`/api/stops/${pick.id}`, { method: 'PATCH', body: { day_date: day } });
+    closeModal();
+    confetti(['🍰', '✨', '🎉', '🧁']);
+    await reload('Dessert first. Always. 🍰');
+  };
+  modal.querySelector('#another').onclick = () => { closeModal(); dessertFirst(day); };
+  modal.querySelector('#notToday').onclick = () => closeModal();
+}
+
+// ---------------------------------------------------------------------------
 // Mom Mode — big text, today only, nothing else
 // ---------------------------------------------------------------------------
 function renderMomMode() {
@@ -608,6 +655,7 @@ function renderPlan(c) {
     ${state.err ? `<div class="err">${esc(state.err)}</div>` : ''}
     <div class="row" style="margin-bottom:4px">
       <button class="btn sm grow" id="aiBtn">✨ Ask the assistant</button>
+      <button class="btn sm quiet" id="budgetBtn">💵 Budget</button>
       <a class="btn sm quiet" href="/api/trips/${t.id}/export" style="text-decoration:none">Export</a>
     </div>
     ${suggested.length && editable ? `<div class="section-label">Suggested by travelers 💜</div><div id="suggestedList"></div>` : ''}
@@ -618,6 +666,7 @@ function renderPlan(c) {
   state.notice = ''; state.err = '';
 
   document.getElementById('aiBtn').onclick = () => aiModal();
+  document.getElementById('budgetBtn').onclick = () => budgetModal();
   if (suggestable) document.getElementById('addStopBtn').onclick = () => stopModal();
 
   const daysList = document.getElementById('daysList');
@@ -762,7 +811,36 @@ function stopModal(s = null) {
       </div>
       ${readOnly ? '' : `<button class="btn full" type="submit">${isNew ? (editable ? 'Add stop' : 'Suggest this stop 💜') : 'Save changes'}</button>`}
       ${!isNew && editable ? '<button class="btn danger full" type="button" id="delStop" style="margin-top:8px">Remove stop</button>' : ''}
-    </form>`);
+    </form>
+    ${!isNew ? `<div id="worthIt">
+      <div class="section-label">⭐ Worth it? <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">— after you've been</span></div>
+      <div class="card">
+        ${[['worth_money', '💵 Worth the money?'], ['worth_time', '⏱️ Worth the time?'], ['would_return', '😊 Would you go again?']].map(([k, q]) => `
+          <div class="spread" style="padding:5px 0"><span class="small">${q}</span>
+            <span class="quiz-opts" data-rate="${k}">
+              <button type="button" data-v="1" class="${s.my_rating?.[k] === 1 ? 'on' : ''}">Yes</button>
+              <button type="button" data-v="0" class="${s.my_rating?.[k] === 0 ? 'on' : ''}">No</button>
+            </span></div>`).join('')}
+        ${s.rating && s.rating.n ? `<div class="muted small" style="margin-top:6px">Group so far: ${s.rating.return_yes}/${s.rating.n} would go again · ${s.rating.money_yes}/${s.rating.n} worth the money</div>` : ''}
+      </div>
+    </div>` : ''}`);
+
+  // Worth it? — tap Yes/No, saved instantly
+  if (!isNew) {
+    const my = { worth_money: s.my_rating?.worth_money ?? null, worth_time: s.my_rating?.worth_time ?? null, would_return: s.my_rating?.would_return ?? null };
+    modal.querySelectorAll('[data-rate]').forEach((row) => {
+      row.querySelectorAll('button').forEach((b) => {
+        b.onclick = async () => {
+          const k = row.dataset.rate;
+          const v = Number(b.dataset.v);
+          my[k] = my[k] === v ? null : v;   // tap again to un-answer
+          row.querySelectorAll('button').forEach((x) => x.classList.toggle('on', Number(x.dataset.v) === my[k]));
+          await api(`/api/stops/${s.id}/rate`, { method: 'POST', body: my });
+          await loadTrip(state.tripId);
+        };
+      });
+    });
+  }
 
   const form = modal.querySelector('#stopForm');
   const catSel = form.querySelector('[name=category]');
@@ -831,6 +909,92 @@ function stopModal(s = null) {
     closeModal();
     await reload();
   };
+}
+
+// ---------------------------------------------------------------------------
+// 💵 Budget tracker
+// ---------------------------------------------------------------------------
+const EXPENSE_META = {
+  hotel: ['🏨', 'Hotels'], food: ['🍔', 'Food'], gas: ['⛽', 'Gas'], tickets: ['🎟️', 'Tickets'],
+  parking: ['🅿️', 'Parking'], shopping: ['🛍️', 'Shopping'], other: ['💵', 'Other'],
+};
+const money = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+async function budgetModal() {
+  const isCaptain = state.trip.me.role === 'captain';
+  const modal = openModal('<h2>💵 Trip budget</h2><div id="budgetBody" class="muted">Adding it up…</div>');
+
+  async function draw() {
+    const { expenses, total_budget, member_count } = await api(`/api/trips/${state.tripId}/expenses`);
+    const spent = expenses.reduce((a, e) => a + e.amount, 0);
+    const byCat = {};
+    for (const e of expenses) byCat[e.category] = (byCat[e.category] || 0) + e.amount;
+    const body = modal.querySelector('#budgetBody');
+    body.classList.remove('muted');
+    body.innerHTML = `
+      <div class="today-hero" style="padding:16px">
+        <div class="today-stats" style="margin-top:0">
+          <div class="stat"><div class="v">${money(spent)}</div><div class="k">spent</div></div>
+          ${total_budget ? `<div class="stat"><div class="v">${money(Math.max(total_budget - spent, 0))}</div><div class="k">remaining</div></div>
+          <div class="stat"><div class="v">${Math.round((spent / total_budget) * 100)}%</div><div class="k">of budget</div></div>` : ''}
+          ${member_count > 1 ? `<div class="stat"><div class="v">${money(spent / member_count)}</div><div class="k">per traveler</div></div>` : ''}
+        </div>
+        ${total_budget && spent > total_budget ? '<div style="margin-top:8px;font-weight:700">😅 Over budget — worth it though, right?</div>' : ''}
+      </div>
+      ${isCaptain ? `<form id="budgetForm" class="row" style="margin-bottom:12px">
+        <input class="grow" name="total_budget" type="number" min="0" step="1" placeholder="Total budget (e.g. 2000)" value="${total_budget || ''}"
+          style="padding:9px 11px;border:1.5px solid var(--line);border-radius:10px">
+        <button class="btn sm quiet" type="submit">Set</button>
+      </form>` : ''}
+      <div class="card">
+        <h3>Add an expense</h3>
+        <form id="expForm">
+          <div class="field-row">
+            <div class="field"><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" placeholder="42.50" required></div>
+            <div class="field"><label>Category</label><select name="category">
+              ${Object.entries(EXPENSE_META).map(([k, [i, l]]) => `<option value="${k}">${i} ${l}</option>`).join('')}</select></div>
+          </div>
+          <div class="field"><label>Note (optional)</label><input name="note" placeholder="Dinner at Cruiser's"></div>
+          <button class="btn full" type="submit">Add it</button>
+        </form>
+      </div>
+      ${Object.keys(byCat).length ? `<div class="card"><h3>Where it went</h3>
+        ${Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([k, v]) => `
+          <div class="spread" style="padding:4px 0"><span>${EXPENSE_META[k][0]} ${EXPENSE_META[k][1]}</span><strong>${money(v)}</strong></div>`).join('')}
+      </div>` : ''}
+      <div id="expList">${expenses.map((e) => `
+        <div class="card" style="padding:10px 14px" data-exp="${e.id}">
+          <div class="spread">
+            <span>${EXPENSE_META[e.category][0]} <strong>${money(e.amount)}</strong> ${e.note ? `· ${esc(e.note)}` : ''}</span>
+            ${e.user_id === state.me.id || isCaptain ? '<button data-delexp class="muted">✕</button>' : ''}
+          </div>
+          <div class="muted small">${esc(firstName(e.who))} · ${timeAgo(e.created_at)}</div>
+        </div>`).join('') || '<p class="muted small" style="text-align:center;padding:8px">No expenses yet. Vacation math starts at zero. 🧮</p>'}
+      </div>`;
+
+    const bf = body.querySelector('#budgetForm');
+    if (bf) bf.onsubmit = async (e) => {
+      e.preventDefault();
+      await api(`/api/trips/${state.tripId}`, { method: 'PATCH', body: { total_budget: new FormData(bf).get('total_budget') } });
+      draw();
+    };
+    body.querySelector('#expForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      try {
+        await api(`/api/trips/${state.tripId}/expenses`, { method: 'POST', body: { amount: f.get('amount'), category: f.get('category'), note: f.get('note') } });
+        draw();
+      } catch (err) { alert(err.message); }
+    };
+    body.querySelectorAll('[data-delexp]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.closest('[data-exp]').dataset.exp;
+        await api(`/api/expenses/${id}`, { method: 'DELETE' });
+        draw();
+      };
+    });
+  }
+  await draw();
 }
 
 // ---------------------------------------------------------------------------

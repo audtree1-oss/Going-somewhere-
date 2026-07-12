@@ -81,6 +81,13 @@ Open the app on a trip day and this screen tells you everything:
 Before the trip starts, this screen shows a countdown. On the first
 morning it announces **IT'S TRIP DAY!!** — because it is.
 
+And at the bottom lives the **🍰 Dessert First** button — a family
+doctrine turned feature. Tap it and the app offers one delightful,
+low-disruption wildcard from your wishlist: *"There's room for one
+little adventure. Take it?"* Take it (it joins today's plan, with
+confetti), roll again, or save it for another day. It never wrecks
+the schedule. It just makes the day 10% more legendary.
+
 ### 🔎 The Big & Simple view (a.k.a. the Mom Button)
 
 At the bottom of Today there's a button that opens today's plan in
@@ -110,6 +117,15 @@ going and what time do I need to be ready?"*
 - **✨ Ask the assistant** — type things like *"find attractions between
   Kingman and Flagstaff"* or *"great cheap lunch near downtown Nashville"*
   and get real suggestions you can add to the wishlist with one tap.
+- **💵 Budget** — set a total budget (captains), and anyone can log
+  expenses in seconds: amount, category (hotels, food, gas, tickets,
+  parking, shopping), optional note. You get spent / remaining /
+  per-traveler totals and a "where it went" breakdown. Anyone can add;
+  you can delete your own; captains can tidy up.
+- **⭐ Worth it?** — open any stop after you've been and answer three
+  quick taps: Worth the money? Worth the time? Would you go again?
+  It's your family's travel history, not anonymous internet reviews —
+  and the Trip Brain learns from it.
 - **Export** downloads your whole trip as a file. Your data is always yours.
 
 ### 🗺️ Map — see the whole trip
@@ -249,8 +265,7 @@ observations get extra witty.
 
 - **Discovery mode** — "psst, that garden you saved is 4 minutes away
   and you've got an hour to kill"
-- **Dessert First** 🍰 — one delightful, low-disruption wildcard, on tap
-- **Budget tracker & full packing lists**
+- **Full packing lists** (master list + per-traveler check-offs)
 - **Automatic memory book** — the Family Feed + your route + ratings,
   woven into a keepsake when the trip ends
 - **Change of Plans mode** — when weather or life wrecks the day:

@@ -127,9 +127,33 @@ CREATE TABLE IF NOT EXISTS post_hearts (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE(post_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS expenses (
+  id INTEGER PRIMARY KEY,
+  trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category TEXT NOT NULL DEFAULT 'other',       -- hotel | food | gas | tickets | parking | shopping | other
+  amount REAL NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  spent_on TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS stop_ratings (
+  id INTEGER PRIMARY KEY,
+  stop_id INTEGER NOT NULL REFERENCES stops(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  worth_money INTEGER,                          -- 1 yes / 0 no / NULL skipped
+  worth_time INTEGER,
+  would_return INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(stop_id, user_id)
+);
 `);
 
+// Migrations for databases created before these columns existed
+try { db.exec('ALTER TABLE trips ADD COLUMN total_budget REAL'); } catch { /* already there */ }
+
 const CATEGORIES = ['restaurant', 'coffee', 'hotel', 'overlook', 'park', 'mountains', 'museum', 'shopping', 'hiking', 'beach', 'concert', 'show', 'roadside', 'gem', 'gas', 'rest', 'other'];
+const EXPENSE_CATEGORIES = ['hotel', 'food', 'gas', 'tickets', 'parking', 'shopping', 'other'];
 const PRIORITIES = ['must', 'like', 'iftime'];
 const PERMISSIONS = ['edit', 'suggest', 'view'];
 const STATUSES = ['', 'ready', 'here', 'need10', 'hungry', 'bathroom', 'lowenergy', 'quiet', 'skipping', 'gowithout', 'changed'];
@@ -272,8 +296,20 @@ app.get('/api/trips/:id', (req, res) => {
   const members = db.prepare(`
     SELECT m.user_id, m.role, m.permission, m.status, m.status_updated_at, u.name
     FROM trip_members m JOIN users u ON u.id = m.user_id WHERE m.trip_id = ? ORDER BY m.role DESC, u.name`).all(trip.id);
+  const ratingAgg = {};
+  for (const r of db.prepare(`
+    SELECT s.id AS stop_id, COUNT(*) AS n,
+      SUM(COALESCE(r.worth_money, 0)) AS money_yes,
+      SUM(COALESCE(r.worth_time, 0)) AS time_yes,
+      SUM(COALESCE(r.would_return, 0)) AS return_yes
+    FROM stop_ratings r JOIN stops s ON s.id = r.stop_id
+    WHERE s.trip_id = ? GROUP BY s.id`).all(trip.id)) ratingAgg[r.stop_id] = r;
+  const myRatings = {};
+  for (const r of db.prepare(`
+    SELECT r.* FROM stop_ratings r JOIN stops s ON s.id = r.stop_id
+    WHERE s.trip_id = ? AND r.user_id = ?`).all(trip.id, req.user.id)) myRatings[r.stop_id] = r;
   const stops = db.prepare('SELECT * FROM stops WHERE trip_id = ? ORDER BY day_date, position, id').all(trip.id)
-    .map((s) => ({ ...s, extra: safeParse(s.extra, {}) }));
+    .map((s) => ({ ...s, extra: safeParse(s.extra, {}), rating: ratingAgg[s.id] || null, my_rating: myRatings[s.id] || null }));
   const polls = db.prepare('SELECT * FROM polls WHERE trip_id = ? ORDER BY id DESC LIMIT 20').all(trip.id).map((p) => {
     const votes = db.prepare('SELECT user_id, choice FROM poll_votes WHERE poll_id = ?').all(p.id);
     return { ...p, options: safeParse(p.options, []), votes };
@@ -286,15 +322,16 @@ app.get('/api/trips/:id', (req, res) => {
 app.patch('/api/trips/:id', (req, res) => {
   const m = requireMember(req, res); if (!m) return;
   if (m.role !== 'captain') return res.status(403).json({ error: 'Only a captain can change trip details.' });
-  const { name, start_date, end_date, cover_emoji, vibe } = req.body || {};
+  const { name, start_date, end_date, cover_emoji, vibe, total_budget } = req.body || {};
   const t = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id);
-  db.prepare('UPDATE trips SET name = ?, start_date = ?, end_date = ?, cover_emoji = ?, vibe = ? WHERE id = ?')
+  db.prepare('UPDATE trips SET name = ?, start_date = ?, end_date = ?, cover_emoji = ?, vibe = ?, total_budget = ? WHERE id = ?')
     .run(
       name !== undefined ? String(name).trim() || t.name : t.name,
       start_date !== undefined ? String(start_date) : t.start_date,
       end_date !== undefined ? String(end_date) : t.end_date,
       cover_emoji !== undefined ? String(cover_emoji).slice(0, 8) : t.cover_emoji,
       vibe !== undefined ? String(vibe) : t.vibe,
+      total_budget !== undefined ? (Number(total_budget) || null) : t.total_budget,
       t.id
     );
   res.json({ ok: true });
@@ -701,6 +738,58 @@ Give 3-6 suggestions. Real places only; if unsure a place exists, prefer well-kn
 });
 
 // ---------------------------------------------------------------------------
+// Budget tracker
+// ---------------------------------------------------------------------------
+app.get('/api/trips/:id/expenses', (req, res) => {
+  const m = requireMember(req, res); if (!m) return;
+  const expenses = db.prepare(`
+    SELECT e.*, u.name AS who FROM expenses e JOIN users u ON u.id = e.user_id
+    WHERE e.trip_id = ? ORDER BY e.id DESC`).all(req.params.id);
+  const trip = db.prepare('SELECT total_budget FROM trips WHERE id = ?').get(req.params.id);
+  const memberCount = db.prepare('SELECT COUNT(*) AS n FROM trip_members WHERE trip_id = ?').get(req.params.id).n;
+  res.json({ expenses, total_budget: trip.total_budget, member_count: memberCount });
+});
+
+app.post('/api/trips/:id/expenses', (req, res) => {
+  const m = requireMember(req, res); if (!m) return;
+  const { category, amount, note, spent_on } = req.body || {};
+  const amt = Number(amount);
+  if (!isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'Need an amount over $0.' });
+  const cat = EXPENSE_CATEGORIES.includes(category) ? category : 'other';
+  const info = db.prepare('INSERT INTO expenses (trip_id, user_id, category, amount, note, spent_on) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(req.params.id, req.user.id, cat, Math.round(amt * 100) / 100, String(note || '').trim().slice(0, 300), String(spent_on || ''));
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+app.delete('/api/expenses/:expId', (req, res) => {
+  const exp = db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.expId);
+  if (!exp) return res.status(404).json({ error: 'Expense not found.' });
+  const m = memberOf(exp.trip_id, req.user.id);
+  if (!m || (exp.user_id !== req.user.id && m.role !== 'captain')) {
+    return res.status(403).json({ error: 'You can only remove expenses you added.' });
+  }
+  db.prepare('DELETE FROM expenses WHERE id = ?').run(exp.id);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// "Worth it?" — three quick questions after a visit. Family history,
+// not anonymous internet reviews. Also feeds the Trip Brain.
+// ---------------------------------------------------------------------------
+app.post('/api/stops/:stopId/rate', (req, res) => {
+  const ctx = stopWithMembership(req, res); if (!ctx) return;
+  const { stop } = ctx;
+  const toBit = (v) => (v === true || v === 1 ? 1 : v === false || v === 0 ? 0 : null);
+  const { worth_money, worth_time, would_return } = req.body || {};
+  db.prepare(`INSERT INTO stop_ratings (stop_id, user_id, worth_money, worth_time, would_return)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(stop_id, user_id) DO UPDATE SET worth_money = excluded.worth_money,
+      worth_time = excluded.worth_time, would_return = excluded.would_return`)
+    .run(stop.id, req.user.id, toBit(worth_money), toBit(worth_time), toBit(would_return));
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // The Family Feed — a private timeline of little moments, per trip
 // ---------------------------------------------------------------------------
 app.get('/api/trips/:id/posts', (req, res) => {
@@ -756,6 +845,9 @@ app.get('/api/me/brain', async (req, res) => {
   const stops = db.prepare(`SELECT category, priority, visit_min, day_date, arrive FROM stops WHERE trip_id IN (${ph}) AND state = 'active'`).all(...tripIds);
   const postCount = db.prepare(`SELECT COUNT(*) AS n FROM trip_posts WHERE trip_id IN (${ph})`).get(...tripIds).n;
   const pollCount = db.prepare(`SELECT COUNT(*) AS n FROM polls WHERE trip_id IN (${ph})`).get(...tripIds).n;
+  const ratings = db.prepare(`
+    SELECT COUNT(*) AS n, SUM(COALESCE(would_return, 0)) AS return_yes, SUM(COALESCE(worth_money, 0)) AS money_yes
+    FROM stop_ratings r JOIN stops s ON s.id = r.stop_id WHERE s.trip_id IN (${ph})`).get(...tripIds);
 
   const insights = [];
   const byCat = {};
@@ -783,6 +875,11 @@ app.get('/api/me/brain', async (req, res) => {
   if (earliest) insights.push(earliest < '09:00' ? `Earliest planned start: ${earliest}. Certified early birds. 🌅` : `Your days start at a civilized hour (earliest: ${earliest}). No alarm-clock vacations here. 😌`);
   if (postCount >= 5) insights.push(`${postCount} moments in your Family Feeds — this crew documents the journey. 📸`);
   if (pollCount >= 3) insights.push(`${pollCount} group votes so far. Democracy rides shotgun. 🗳️`);
+  if (ratings.n >= 3) {
+    const pct = Math.round((ratings.return_yes / ratings.n) * 100);
+    insights.push(pct >= 70 ? `${pct}% of rated stops earned a "would go again." You pick winners. 🏆`
+      : `Only ${pct}% of rated stops earned a "would go again" — a tough crowd with high standards. 🧐`);
+  }
   if (insights.length < 2) insights.push('The Brain gets smarter with every stop, vote, and post you add. Keep traveling. 🧠');
 
   // AI polish: turn the raw stats into sharper observations when available
@@ -791,7 +888,7 @@ app.get('/api/me/brain', async (req, res) => {
       `You are the "Trip Brain" inside a group road-trip app. Given travel-pattern stats, write 3-4 short,
 warm, funny observations about this traveler's style (second person). Each under 20 words. Respond ONLY
 with a JSON array of strings. No advice, just observations that make them feel seen.`,
-      `Stats: ${JSON.stringify({ stopsByCategory: byCat, mustDoRatio: mustRatio, avgStopsPerDay: dayVals.length ? dayVals.reduce((a, b) => a + b, 0) / dayVals.length : null, earliestStart: earliest, feedPosts: postCount, votes: pollCount })}`,
+      `Stats: ${JSON.stringify({ stopsByCategory: byCat, mustDoRatio: mustRatio, avgStopsPerDay: dayVals.length ? dayVals.reduce((a, b) => a + b, 0) / dayVals.length : null, earliestStart: earliest, feedPosts: postCount, votes: pollCount, ratingsGiven: ratings.n, wouldReturnRate: ratings.n ? ratings.return_yes / ratings.n : null })}`,
       600
     );
     const ai = safeParse(raw, null);
@@ -809,8 +906,9 @@ app.get('/api/trips/:id/export', (req, res) => {
   const stops = db.prepare('SELECT * FROM stops WHERE trip_id = ? ORDER BY day_date, position').all(trip.id);
   const members = db.prepare('SELECT u.name, m.role FROM trip_members m JOIN users u ON u.id = m.user_id WHERE m.trip_id = ?').all(trip.id);
   const posts = db.prepare('SELECT p.body, p.created_at, u.name AS author FROM trip_posts p JOIN users u ON u.id = p.user_id WHERE p.trip_id = ? ORDER BY p.id').all(trip.id);
+  const expenses = db.prepare('SELECT e.category, e.amount, e.note, e.spent_on, u.name AS who FROM expenses e JOIN users u ON u.id = e.user_id WHERE e.trip_id = ? ORDER BY e.id').all(trip.id);
   res.setHeader('Content-Disposition', `attachment; filename="${trip.name.replace(/[^\w -]/g, '_')}.json"`);
-  res.json({ trip, stops, members, feed: posts, exported_at: new Date().toISOString() });
+  res.json({ trip, stops, members, feed: posts, expenses, exported_at: new Date().toISOString() });
 });
 
 // ---------------------------------------------------------------------------
