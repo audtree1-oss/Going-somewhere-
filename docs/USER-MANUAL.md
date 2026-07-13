@@ -144,6 +144,16 @@ It's not social media — nobody outside the trip ever sees it, and it
 exports with the rest of your trip data. When the memory-book feature
 arrives, these moments become its raw material.
 
+### 📖 The Memory Book
+
+When the trip ends, the Today screen offers the **Memory Book** — and
+it's also one tap away in the Feed tab anytime. It weaves everything
+into a single beautiful page: the cover, the crew, the numbers (days,
+stops, miles, moments, money well spent), the crowd-favorite stop 🏆,
+and then day by day — every stop alongside the Family Feed moments and
+photos from that day. Hit the print button to save it as a PDF or put
+it on paper. The trip becomes a keepsake, automatically.
+
 ### 👥 People — this is the special sauce
 
 - **"How are you doing?"** — tap your status: ✅ I'm ready ·
@@ -161,6 +171,15 @@ arrives, these moments become its raw material.
   - **Captain only** — just the trip captain sees it (great for "my
     knees can't do six-mile hikes" without a group announcement)
   - **Just for me** — nobody sees it but you
+- **✈️ Getting there & back** — if someone's arriving or departing
+  differently than the group (a late flight in, an early flight out),
+  they tap "Arriving or departing different than the group?" and log
+  the date, time, how they're traveling, the time zone, a flight note,
+  and a "must leave by" time. It shows on their name in the group
+  pulse, and on the day it happens, the Today screen announces it:
+  *"Cooper: ✈️ Arrives Tue, Jul 14 · 9:00 AM (Arizona time)."*
+  Captains can enter it for anyone (Manage → Travel plans) — perfect
+  for travelers who'd rather text you their flight than open an app.
 - **Invite travelers** (captains only) — pick what new people can do,
   get a code and a link, and text it to them:
   - **Can edit** ✏️ — full co-planner
@@ -243,6 +262,14 @@ seconds while you're on a trip, so changes flow to everyone quickly.
 keep working, but new searches, maps, and syncs need a connection.
 A true offline mode is on the roadmap.
 
+**Someone forgot their password?** There's a "Forgot your password?"
+link on the login screen. If email sending is set up (a free
+resend.com key in Render), they get a reset link in their inbox. If
+it isn't, the app owner can mint a reset link by visiting:
+`https://YOUR-APP-URL/api/admin/reset-link?email=THEIR-EMAIL&secret=YOUR-SECRET`
+(the secret is `ADMIN_RESET_SECRET` in Render → Environment) — then
+text the link to the locked-out traveler. It works for 2 hours.
+
 **Something looks broken?** Pull down to refresh first. Still weird?
 Tell Audrey — the fix usually ships the same day, and your app updates
 itself automatically when it does.
@@ -266,8 +293,6 @@ observations get extra witty.
 - **Discovery mode** — "psst, that garden you saved is 4 minutes away
   and you've got an hour to kill"
 - **Full packing lists** (master list + per-traveler check-offs)
-- **Automatic memory book** — the Family Feed + your route + ratings,
-  woven into a keepsake when the trip ends
 - **Change of Plans mode** — when weather or life wrecks the day:
   Keep the plan / Swap the plan / Split and rejoin
 - **School Trip Mode** — pods, headcounts, chaperone alerts (the

@@ -22,3 +22,12 @@ services:
       # explains it needs a key.
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Password-reset emails (resend.com; free tier is plenty). Without
+      # it, the app owner can still mint reset links using
+      # ADMIN_RESET_SECRET — see docs/USER-MANUAL.md.
+      - key: RESEND_API_KEY
+        sync: false
+      # Secret for the owner's manual reset-link fallback. Auto-generated;
+      # find it in the Render dashboard under Environment.
+      - key: ADMIN_RESET_SECRET
+        generateValue: true

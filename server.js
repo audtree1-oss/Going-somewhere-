@@ -15,6 +15,9 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const EMAIL_FROM = process.env.EMAIL_FROM || 'Going Somewhere! <onboarding@resend.dev>';
+const ADMIN_RESET_SECRET = process.env.ADMIN_RESET_SECRET || '';
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -151,6 +154,10 @@ CREATE TABLE IF NOT EXISTS stop_ratings (
 
 // Migrations for databases created before these columns existed
 try { db.exec('ALTER TABLE trips ADD COLUMN total_budget REAL'); } catch { /* already there */ }
+try { db.exec('ALTER TABLE users ADD COLUMN reset_token TEXT'); } catch { /* already there */ }
+try { db.exec("ALTER TABLE users ADD COLUMN reset_expires TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
+try { db.exec("ALTER TABLE trip_members ADD COLUMN arrival TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
+try { db.exec("ALTER TABLE trip_members ADD COLUMN departure TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
 
 const CATEGORIES = ['restaurant', 'coffee', 'hotel', 'overlook', 'park', 'mountains', 'museum', 'shopping', 'hiking', 'beach', 'concert', 'show', 'roadside', 'gem', 'gas', 'rest', 'other'];
 const EXPENSE_CATEGORIES = ['hotel', 'food', 'gas', 'tickets', 'parking', 'shopping', 'other'];
@@ -248,6 +255,59 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Password reset (public routes) ---
+function makeResetLink(req, user) {
+  const token = crypto.randomBytes(32).toString('hex');
+  db.prepare("UPDATE users SET reset_token = ?, reset_expires = datetime('now', '+2 hours') WHERE id = ?").run(token, user.id);
+  return `${req.protocol}://${req.get('host')}/?reset=${token}`;
+}
+
+app.post('/api/forgot', async (req, res) => {
+  const email = String((req.body || {}).email || '').trim().toLowerCase();
+  const user = email ? db.prepare('SELECT * FROM users WHERE email = ?').get(email) : null;
+  if (user && RESEND_API_KEY) {
+    const link = makeResetLink(req, user);
+    try {
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          from: EMAIL_FROM, to: email, subject: 'Reset your Going Somewhere! password',
+          html: `<p>Hi ${user.name.split(' ')[0]}! Tap the link below to pick a new password. It works for 2 hours.</p>
+            <p><a href="${link}">${link}</a></p>
+            <p>If you didn't ask for this, you can ignore it — your password is unchanged. 🚗💨</p>`,
+        }),
+      });
+    } catch { /* same generic response either way */ }
+  }
+  // Always the same answer — never reveal whether an email has an account
+  res.json({ ok: true, email_configured: !!RESEND_API_KEY });
+});
+
+app.post('/api/reset', (req, res) => {
+  const { token, password } = req.body || {};
+  if (!password || password.length < 8) return res.status(400).json({ error: 'New password needs at least 8 characters.' });
+  const user = db.prepare("SELECT * FROM users WHERE reset_token = ? AND reset_token IS NOT NULL AND reset_expires > datetime('now')")
+    .get(String(token || ''));
+  if (!user) return res.status(400).json({ error: 'That reset link is expired or already used — request a fresh one.' });
+  db.prepare("UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = '' WHERE id = ?")
+    .run(bcrypt.hashSync(password, 12), user.id);
+  newSession(res, user.id);
+  res.json({ ok: true });
+});
+
+// Owner's fallback when no email service is configured: whoever holds
+// ADMIN_RESET_SECRET (set in Render's env vars) can mint a reset link
+// and text it to the locked-out traveler.
+app.get('/api/admin/reset-link', (req, res) => {
+  if (!ADMIN_RESET_SECRET || req.query.secret !== ADMIN_RESET_SECRET) {
+    return res.status(403).json({ error: 'Not allowed.' });
+  }
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(String(req.query.email || '').trim().toLowerCase());
+  if (!user) return res.status(404).json({ error: 'No account with that email.' });
+  res.json({ ok: true, link: makeResetLink(req, user), expires: 'in 2 hours' });
+});
+
 app.use('/api', requireAuth);
 app.use('/covers', requireAuth);
 
@@ -294,8 +354,9 @@ app.get('/api/trips/:id', (req, res) => {
   const m = requireMember(req, res); if (!m) return;
   const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id);
   const members = db.prepare(`
-    SELECT m.user_id, m.role, m.permission, m.status, m.status_updated_at, u.name
-    FROM trip_members m JOIN users u ON u.id = m.user_id WHERE m.trip_id = ? ORDER BY m.role DESC, u.name`).all(trip.id);
+    SELECT m.user_id, m.role, m.permission, m.status, m.status_updated_at, m.arrival, m.departure, u.name
+    FROM trip_members m JOIN users u ON u.id = m.user_id WHERE m.trip_id = ? ORDER BY m.role DESC, u.name`).all(trip.id)
+    .map((mm) => ({ ...mm, arrival: safeParse(mm.arrival, null), departure: safeParse(mm.departure, null) }));
   const ratingAgg = {};
   for (const r of db.prepare(`
     SELECT s.id AS stop_id, COUNT(*) AS n,
@@ -503,6 +564,31 @@ app.post('/api/trips/:id/reorder', (req, res) => {
     ids.forEach((id, i) => update.run(i + 1, String(day_date || ''), id, req.params.id));
   });
   tx();
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Travel plans — arriving or departing differently than the group
+// ("Cooper lands Tuesday 9:00 AM, Arizona time")
+// ---------------------------------------------------------------------------
+app.post('/api/trips/:id/members/:userId/travel', (req, res) => {
+  const m = requireMember(req, res); if (!m) return;
+  const targetId = Number(req.params.userId);
+  if (targetId !== req.user.id && m.role !== 'captain') {
+    return res.status(403).json({ error: 'You can set your own travel plans; captains can set anyone\'s.' });
+  }
+  const target = memberOf(req.params.id, targetId);
+  if (!target) return res.status(404).json({ error: 'Not a member of this trip.' });
+  const clean = (o) => {
+    if (!o || typeof o !== 'object') return '';
+    const out = {};
+    for (const k of ['date', 'time', 'mode', 'note', 'ready_by', 'tz']) {
+      if (o[k]) out[k] = String(o[k]).trim().slice(0, 140);
+    }
+    return Object.keys(out).length ? JSON.stringify(out) : '';
+  };
+  db.prepare('UPDATE trip_members SET arrival = ?, departure = ? WHERE id = ?')
+    .run(clean((req.body || {}).arrival), clean((req.body || {}).departure), target.id);
   res.json({ ok: true });
 });
 
@@ -909,6 +995,116 @@ app.get('/api/trips/:id/export', (req, res) => {
   const expenses = db.prepare('SELECT e.category, e.amount, e.note, e.spent_on, u.name AS who FROM expenses e JOIN users u ON u.id = e.user_id WHERE e.trip_id = ? ORDER BY e.id').all(trip.id);
   res.setHeader('Content-Disposition', `attachment; filename="${trip.name.replace(/[^\w -]/g, '_')}.json"`);
   res.json({ trip, stops, members, feed: posts, expenses, exported_at: new Date().toISOString() });
+});
+
+// ---------------------------------------------------------------------------
+// 📖 The Memory Book — the trip, woven into a keepsake. Print it or keep it.
+// ---------------------------------------------------------------------------
+function haversineMiles(a, b) {
+  const R = 3958.8, toR = (d) => (d * Math.PI) / 180;
+  const dLat = toR(b.lat - a.lat), dLng = toR(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const bookEsc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+app.get('/trips/:id/book', (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.redirect('/');
+  const m = memberOf(req.params.id, user.id);
+  if (!m) return res.status(403).send('You are not on this trip.');
+  const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id);
+  const members = db.prepare('SELECT u.name FROM trip_members tm JOIN users u ON u.id = tm.user_id WHERE tm.trip_id = ?').all(trip.id);
+  const stops = db.prepare("SELECT * FROM stops WHERE trip_id = ? AND state = 'active' AND day_date != '' ORDER BY day_date, position").all(trip.id);
+  const posts = db.prepare('SELECT p.*, u.name AS author FROM trip_posts p JOIN users u ON u.id = p.user_id WHERE p.trip_id = ? ORDER BY p.id').all(trip.id);
+  const ratings = {};
+  for (const r of db.prepare(`
+    SELECT s.id AS stop_id, COUNT(*) AS n, SUM(COALESCE(r.would_return, 0)) AS return_yes
+    FROM stop_ratings r JOIN stops s ON s.id = r.stop_id WHERE s.trip_id = ? GROUP BY s.id`).all(trip.id)) ratings[r.stop_id] = r;
+  const spent = db.prepare('SELECT COALESCE(SUM(amount), 0) AS t FROM expenses WHERE trip_id = ?').get(trip.id).t;
+
+  const days = [...new Set(stops.map((s) => s.day_date))].sort();
+  const geo = stops.filter((s) => s.lat != null && s.lng != null);
+  let miles = 0;
+  for (let i = 1; i < geo.length; i++) miles += haversineMiles(geo[i - 1], geo[i]);
+  const best = stops.filter((s) => ratings[s.id] && ratings[s.id].n > 0)
+    .sort((a, b) => (ratings[b.id].return_yes / ratings[b.id].n) - (ratings[a.id].return_yes / ratings[a.id].n))[0];
+  const catIcons = { restaurant: '🍽️', coffee: '☕', hotel: '🏨', overlook: '🌄', park: '🏞️', mountains: '🏔️', museum: '🏛️', shopping: '🛍️', hiking: '🥾', beach: '🏖️', concert: '🎸', show: '🎭', roadside: '🛸', gem: '💎', gas: '⛽', rest: '🚻', other: '📍' };
+  const fmtDay = (iso) => {
+    const [y, mo, d] = iso.split('-').map(Number);
+    return new Date(y, mo - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  };
+  const postsByDay = {};
+  for (const p of posts) {
+    const d = (p.created_at || '').slice(0, 10);
+    (postsByDay[d] = postsByDay[d] || []).push(p);
+  }
+  const strayPosts = posts.filter((p) => !days.includes((p.created_at || '').slice(0, 10)));
+
+  const stat = (v, k) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`;
+  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${bookEsc(trip.name)} — Memory Book</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: Georgia, 'Times New Roman', serif; background: #faf5ec; color: #26302f; line-height: 1.5; }
+  .page { max-width: 680px; margin: 0 auto; padding: 28px 22px 60px; }
+  .cover { text-align: center; padding: 60px 20px 40px; }
+  .cover .emoji { font-size: 84px; }
+  ${trip.cover_file ? `.cover .photo { width: 100%; max-width: 440px; border-radius: 18px; margin-bottom: 18px; }` : ''}
+  h1 { font-size: 38px; color: #1d4e50; margin: 10px 0 4px; }
+  .dates { color: #5c6b69; font-size: 18px; }
+  .crew { margin-top: 10px; color: #5c6b69; font-style: italic; }
+  .stats { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 34px 0; }
+  .stat { background: #1d4e50; color: #fff; border-radius: 14px; padding: 12px 18px; min-width: 100px; }
+  .stat .v { font-size: 22px; font-weight: 700; } .stat .k { font-size: 12px; opacity: .85; }
+  .best { background: #fdebd6; border-radius: 14px; padding: 16px 18px; text-align: center; margin: 0 0 30px; }
+  h2 { font-size: 24px; color: #1d4e50; border-bottom: 2px solid #e8763a; padding-bottom: 4px; margin: 38px 0 14px; page-break-after: avoid; }
+  .stop { padding: 8px 0 8px 14px; border-left: 3px solid #e5ddd0; margin-bottom: 6px; }
+  .stop .nm { font-weight: 700; font-size: 17px; }
+  .stop .meta, .moment .meta { color: #5c6b69; font-size: 13px; }
+  .moment { background: #fff; border-radius: 14px; padding: 14px 16px; margin: 10px 0; box-shadow: 0 2px 8px rgba(30,45,44,.08); page-break-inside: avoid; }
+  .moment img { width: 100%; border-radius: 10px; margin-top: 8px; }
+  .fin { text-align: center; margin-top: 60px; color: #5c6b69; font-style: italic; }
+  .printbar { position: sticky; top: 0; background: #1d4e50; padding: 10px; text-align: center; }
+  .printbar button { font: inherit; background: #e8763a; color: #fff; border: none; border-radius: 10px; padding: 9px 22px; font-weight: 700; cursor: pointer; }
+  @media print { .printbar { display: none; } body { background: #fff; } }
+</style></head><body>
+<div class="printbar"><button onclick="window.print()">🖨️ Print / Save as PDF</button></div>
+<div class="page">
+  <div class="cover">
+    ${trip.cover_file ? `<img class="photo" src="/covers/${bookEsc(trip.cover_file)}" alt="">` : `<div class="emoji">${bookEsc(trip.cover_emoji)}</div>`}
+    <h1>${bookEsc(trip.name)}</h1>
+    <div class="dates">${trip.start_date ? `${fmtDay(trip.start_date)} — ${fmtDay(trip.end_date || trip.start_date)}` : ''}</div>
+    <div class="crew">${members.map((x) => bookEsc(x.name.split(' ')[0])).join(' · ')}</div>
+  </div>
+  <div class="stats">
+    ${stat(days.length, days.length === 1 ? 'day' : 'days')}
+    ${stat(stops.length, 'stops')}
+    ${miles > 1 ? stat(Math.round(miles).toLocaleString() + ' mi', 'across the map') : ''}
+    ${posts.length ? stat(posts.length, 'moments') : ''}
+    ${spent > 0 ? stat('$' + Math.round(spent).toLocaleString(), 'well spent') : ''}
+  </div>
+  ${best ? `<div class="best">🏆 <strong>Crowd favorite:</strong> ${catIcons[best.category] || '📍'} ${bookEsc(best.name)} — ${ratings[best.id].return_yes} of ${ratings[best.id].n} would go again</div>` : ''}
+  ${days.map((d, i) => `
+    <h2>Day ${i + 1} — ${fmtDay(d)}</h2>
+    ${stops.filter((s) => s.day_date === d).map((s) => `
+      <div class="stop"><span class="nm">${catIcons[s.category] || '📍'} ${bookEsc(s.name)}</span>
+        ${ratings[s.id] && ratings[s.id].return_yes === ratings[s.id].n && ratings[s.id].n > 0 ? ' ⭐' : ''}
+        ${s.notes ? `<div class="meta">${bookEsc(s.notes)}</div>` : ''}
+      </div>`).join('')}
+    ${(postsByDay[d] || []).map((p) => `
+      <div class="moment">${p.body ? bookEsc(p.body) : ''}
+        ${p.photo ? `<img src="/covers/${bookEsc(p.photo)}" alt="">` : ''}
+        <div class="meta">— ${bookEsc(p.author.split(' ')[0])}</div>
+      </div>`).join('')}`).join('')}
+  ${strayPosts.length ? `<h2>More moments</h2>${strayPosts.map((p) => `
+      <div class="moment">${p.body ? bookEsc(p.body) : ''}
+        ${p.photo ? `<img src="/covers/${bookEsc(p.photo)}" alt="">` : ''}
+        <div class="meta">— ${bookEsc(p.author.split(' ')[0])}</div>
+      </div>`).join('')}` : ''}
+  <div class="fin">The end… until the next one. 🚗💨<br>Made with Going Somewhere!</div>
+</div></body></html>`);
 });
 
 // ---------------------------------------------------------------------------

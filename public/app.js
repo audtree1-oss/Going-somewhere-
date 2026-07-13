@@ -146,6 +146,12 @@ async function boot() {
     localStorage.setItem('gs_pending_code', params.get('code').toUpperCase());
     history.replaceState({}, '', '/');
   }
+  if (params.get('reset')) {
+    const token = params.get('reset');
+    history.replaceState({}, '', '/');
+    renderResetForm(token);
+    return;
+  }
   try {
     const { user } = await api('/api/me');
     state.me = user;
@@ -209,26 +215,38 @@ function renderAuth(mode = 'login') {
         <h1>Going Somewhere!</h1>
         <p>Grab your people. Pack your bags. <strong>GO.</strong></p>
       </div>
+      ${state.notice ? `<div class="notice">${esc(state.notice)}</div>` : ''}
       ${state.err ? `<div class="err">${esc(state.err)}</div>` : ''}
       <div class="card">
         <form id="authForm">
           ${mode === 'signup' ? `
           <div class="field"><label>Your name</label><input name="name" autocomplete="name" required></div>` : ''}
           <div class="field"><label>Email</label><input name="email" type="email" autocomplete="email" required></div>
-          <div class="field"><label>Password</label><input name="password" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" minlength="8" required></div>
-          <button class="btn full" type="submit">${mode === 'signup' ? 'Create my account' : 'Log in'}</button>
+          ${mode === 'forgot' ? '' : `<div class="field"><label>Password</label><input name="password" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" minlength="8" required></div>`}
+          <button class="btn full" type="submit">${mode === 'signup' ? 'Create my account' : mode === 'forgot' ? 'Send me a reset link' : 'Log in'}</button>
         </form>
       </div>
+      ${mode === 'login' ? '<p class="muted small" style="text-align:center;margin-bottom:8px"><a href="#" id="forgotLink">Forgot your password?</a></p>' : ''}
       <p class="muted" style="text-align:center">
         ${mode === 'signup' ? 'Already have an account?' : 'New here?'}
         <a href="#" id="authSwap">${mode === 'signup' ? 'Log in' : 'Create an account'}</a>
       </p>
     </div>`;
-  state.err = '';
+  state.err = ''; state.notice = '';
   document.getElementById('authSwap').onclick = (e) => { e.preventDefault(); renderAuth(mode === 'signup' ? 'login' : 'signup'); };
+  const forgot = document.getElementById('forgotLink');
+  if (forgot) forgot.onclick = (e) => { e.preventDefault(); renderAuth('forgot'); };
   document.getElementById('authForm').onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    if (mode === 'forgot') {
+      const r = await api('/api/forgot', { method: 'POST', body: { email: f.get('email') } });
+      state.notice = r.email_configured
+        ? 'If that email has an account, a reset link is on its way. Check your inbox (and spam). 📬'
+        : 'Email isn’t set up on this app yet — ask the app owner for a reset link instead. They know how!';
+      renderAuth('login');
+      return;
+    }
     try {
       await api(mode === 'signup' ? '/api/signup' : '/api/login', {
         method: 'POST',
@@ -236,6 +254,36 @@ function renderAuth(mode = 'login') {
       });
       await boot();
     } catch (err) { state.err = err.message; renderAuth(mode); }
+  };
+}
+
+function renderResetForm(token) {
+  $app.innerHTML = `
+    <div class="screen">
+      <div class="auth-hero"><div class="logo">🔑</div><h1>Pick a new password</h1></div>
+      <div id="resetErr"></div>
+      <div class="card">
+        <form id="resetForm">
+          <div class="field"><label>New password (8+ characters)</label><input name="password" type="password" autocomplete="new-password" minlength="8" required></div>
+          <div class="field"><label>Same one again</label><input name="password2" type="password" autocomplete="new-password" minlength="8" required></div>
+          <button class="btn full" type="submit">Save & log me in</button>
+        </form>
+      </div>
+    </div>`;
+  document.getElementById('resetForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    if (f.get('password') !== f.get('password2')) {
+      document.getElementById('resetErr').innerHTML = '<div class="err">Those don’t match — try again.</div>';
+      return;
+    }
+    try {
+      await api('/api/reset', { method: 'POST', body: { token, password: f.get('password') } });
+      state.notice = 'New password saved — welcome back! 🎉';
+      await boot();
+    } catch (err) {
+      document.getElementById('resetErr').innerHTML = `<div class="err">${esc(err.message)}</div>`;
+    }
   };
 }
 
@@ -413,6 +461,29 @@ async function renderToday(c) {
   if (changed > 0) {
     body.insertAdjacentHTML('beforeend',
       `<div class="notice">🔄 ${changed} thing${changed === 1 ? '' : 's'} in the plan changed since you last looked — the timeline below is current.</div>`);
+  }
+
+  // ✈️ Comings & goings — who arrives or departs on this day
+  const movements = [];
+  for (const mm of (state.trip.members || [])) {
+    if (mm.arrival && mm.arrival.date === day) movements.push(`${esc(firstName(mm.name))}: ${travelLine('arrival', mm.arrival)}`);
+    if (mm.departure && mm.departure.date === day) movements.push(`${esc(firstName(mm.name))}: ${travelLine('departure', mm.departure)}`);
+  }
+  if (movements.length) {
+    body.insertAdjacentHTML('beforeend', `
+      <div class="section-label">✈️ Comings & goings today</div>
+      <div class="card">${movements.map((x) => `<div class="small" style="padding:3px 0">${x}</div>`).join('')}</div>`);
+  }
+
+  // 📖 Trip's over? The Memory Book awaits.
+  if (t.end_date && today > t.end_date) {
+    body.insertAdjacentHTML('beforeend', `
+      <div class="card" style="text-align:center;padding:20px">
+        <div style="font-size:34px">📖</div>
+        <h3 style="margin:6px 0 4px">The trip is a memory now</h3>
+        <p class="muted small" style="margin-bottom:10px">Every stop, moment, and photo — woven into a keepsake you can print or save.</p>
+        <a class="btn" href="/trips/${t.id}/book" target="_blank" style="text-decoration:none">Open the Memory Book</a>
+      </div>`);
   }
 
   if (!stops.length) {
@@ -1111,7 +1182,8 @@ async function renderFeed(c) {
   c.innerHTML = `
     ${state.notice ? `<div class="notice">${esc(state.notice)}</div>` : ''}
     <div class="card">
-      <h3>📸 The Family Feed</h3>
+      <div class="spread"><h3>📸 The Family Feed</h3>
+        <a class="btn sm quiet" href="/trips/${state.trip.trip.id}/book" target="_blank" style="text-decoration:none">📖 Memory Book</a></div>
       <p class="muted small" style="margin-bottom:10px">Little moments, big pie, six accidental tacos. Private to this trip — and it all becomes the trip's story.</p>
       <form id="postForm">
         <div class="field"><textarea name="body" placeholder="Mom found the world's largest pistachio…" style="min-height:56px"></textarea></div>
@@ -1198,6 +1270,11 @@ function renderPeople(c) {
     </div>
     <div class="section-label">Group pulse ${members.length > 1 ? `· ${readyCount} of ${members.length} ready` : ''}</div>
     <div class="card" id="pulseList"></div>
+    <div class="section-label">✈️ Getting there & back</div>
+    <div class="card">
+      <p class="muted small" style="margin-bottom:8px">Flying in late? Leaving early? Log it so the whole group knows who lands when — and nobody plans dinner during your flight.</p>
+      <button class="btn ghost full" id="travelBtn">${(me2 => me2 && (me2.arrival || me2.departure) ? 'Update my travel plans' : 'Arriving or departing different than the group?')(members.find((x) => x.user_id === state.me.id))}</button>
+    </div>
     <div class="section-label">My Travel Rhythm</div>
     <div class="card">
       <p class="muted small" style="margin-bottom:8px">A few quick prompts so the trip fits everyone. <strong>Every question is skippable</strong> — skipped ones simply don't appear in your profile.</p>
@@ -1231,10 +1308,13 @@ function renderPeople(c) {
     pulse.insertAdjacentHTML('beforeend', `<div class="member-row">
       <div class="avatar">${esc(firstName(m.name)[0] || '?')}</div>
       <div class="grow"><strong>${esc(m.name)}</strong> ${m.role === 'captain' ? '<span class="pill captain">Captain</span>' : ''}
-        <div class="muted small">${meta ? `${meta[0]} ${meta[1]} · ${timeAgo(m.status_updated_at)}` : 'No status yet'}</div></div>
+        <div class="muted small">${meta ? `${meta[0]} ${meta[1]} · ${timeAgo(m.status_updated_at)}` : 'No status yet'}</div>
+        ${m.arrival ? `<div class="muted small">${travelLine('arrival', m.arrival)}</div>` : ''}
+        ${m.departure ? `<div class="muted small">${travelLine('departure', m.departure)}</div>` : ''}</div>
       ${isCaptain && m.user_id !== state.me.id ? `<button class="mini" style="background:#eee7da;border-radius:8px;padding:5px 9px;font-size:12px" data-manage="${m.user_id}">Manage</button>` : ''}
     </div>`);
   });
+  document.getElementById('travelBtn').onclick = () => travelModal(members.find((x) => x.user_id === state.me.id));
   pulse.querySelectorAll('[data-manage]').forEach((b) => {
     b.onclick = () => manageMemberModal(members.find((m) => m.user_id === Number(b.dataset.manage)));
   });
@@ -1261,6 +1341,74 @@ function renderPeople(c) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ✈️ Travel plans — arriving or departing differently than the group
+// ---------------------------------------------------------------------------
+const TRAVEL_MODES = { plane: '✈️ Plane', car: '🚗 Car', train: '🚆 Train', bus: '🚌 Bus', other: '🧳 Other' };
+
+function travelLine(kind, o) {
+  const ico = (TRAVEL_MODES[o.mode] || '🧳').split(' ')[0];
+  const bits = [];
+  if (o.date) bits.push(fmtDate(o.date, { weekday: 'short', month: 'short', day: 'numeric' }));
+  if (o.time) bits.push(fmtTime(o.time));
+  if (o.tz) bits.push(`(${esc(o.tz)})`);
+  let line = `${ico} ${kind === 'arrival' ? 'Arrives' : 'Departs'} ${bits.join(' · ')}`;
+  if (o.ready_by) line += ` — ${kind === 'arrival' ? 'pickup by' : 'must leave by'} ${fmtTime(o.ready_by)}`;
+  if (o.note) line += ` · ${esc(o.note)}`;
+  return line;
+}
+
+function travelModal(member) {
+  const canSave = member.user_id === state.me.id || state.trip.me.role === 'captain';
+  const section = (kind, label, o) => `
+    <div class="section-label">${label}</div>
+    <div class="card" data-kind="${kind}">
+      <label class="row" style="margin-bottom:10px;font-weight:600;font-size:14px">
+        <input type="checkbox" data-on ${o ? 'checked' : ''}> Different than the group
+      </label>
+      <div data-fields style="${o ? '' : 'display:none'}">
+        <div class="field-row">
+          <div class="field"><label>Date</label><input data-f="date" type="date" value="${esc(o?.date || '')}"></div>
+          <div class="field"><label>Time</label><input data-f="time" type="time" value="${esc(o?.time || '')}"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>How</label><select data-f="mode">
+            ${Object.entries(TRAVEL_MODES).map(([k, l]) => `<option value="${k}" ${o?.mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          <div class="field"><label>Time zone (optional)</label><input data-f="tz" placeholder="Arizona time" value="${esc(o?.tz || '')}"></div>
+        </div>
+        <div class="field"><label>${kind === 'arrival' ? 'Pick up / meet by (optional)' : 'Must leave for the airport by (optional)'}</label>
+          <input data-f="ready_by" type="time" value="${esc(o?.ready_by || '')}"></div>
+        <div class="field"><label>Note (flight #, airport… optional)</label><input data-f="note" placeholder="AA1123 into PHX" value="${esc(o?.note || '')}"></div>
+      </div>
+    </div>`;
+  const modal = openModal(`
+    <h2>✈️ ${member.user_id === state.me.id ? 'My travel plans' : `${esc(firstName(member.name))}'s travel plans`}</h2>
+    <p class="muted small" style="margin-bottom:4px">Only fill in what's different — travelers with the group need nothing here.</p>
+    ${section('arrival', '🛬 Arriving', member.arrival)}
+    ${section('departure', '🛫 Departing', member.departure)}
+    ${canSave ? '<button class="btn full" id="travelSave">Save travel plans</button>' : ''}`);
+  modal.querySelectorAll('[data-kind]').forEach((card) => {
+    const on = card.querySelector('[data-on]');
+    on.onchange = () => { card.querySelector('[data-fields]').style.display = on.checked ? '' : 'none'; };
+  });
+  const save = modal.querySelector('#travelSave');
+  if (save) save.onclick = async () => {
+    const read = (kind) => {
+      const card = modal.querySelector(`[data-kind="${kind}"]`);
+      if (!card.querySelector('[data-on]').checked) return null;
+      const out = {};
+      card.querySelectorAll('[data-f]').forEach((f) => { if (f.value) out[f.dataset.f] = f.value; });
+      return Object.keys(out).length ? out : null;
+    };
+    await api(`/api/trips/${state.tripId}/members/${member.user_id}/travel`, {
+      method: 'POST',
+      body: { arrival: read('arrival'), departure: read('departure') },
+    });
+    closeModal();
+    await reload('Travel plans saved — the group can see them now. ✈️');
+  };
+}
+
 function manageMemberModal(m) {
   const modal = openModal(`
     <h2>${esc(m.name)}</h2>
@@ -1270,7 +1418,9 @@ function manageMemberModal(m) {
     <div class="field"><label>Permission (travelers)</label>
       <select id="mmPerm">${['edit', 'suggest', 'view'].map((p) => `<option value="${p}" ${m.permission === p ? 'selected' : ''}>${p}</option>`).join('')}</select></div>
     <button class="btn full" id="mmSave">Save</button>
+    <button class="btn ghost full" id="mmTravel" style="margin-top:8px">✈️ Travel plans</button>
     <button class="btn danger full" id="mmRemove" style="margin-top:8px">Remove from trip</button>`);
+  modal.querySelector('#mmTravel').onclick = () => travelModal(m);
   modal.querySelector('#mmSave').onclick = async () => {
     await api(`/api/trips/${state.tripId}/members/${m.user_id}`, {
       method: 'POST',
