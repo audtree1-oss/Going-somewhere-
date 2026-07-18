@@ -52,6 +52,9 @@ knows what's happening, where to be, and when to be ready.
 - **🧠 Trip Brain** — learns your travel style from real trips: favorite
   stop types, day density, coffee dependence, must-do decisiveness,
   how often stops earn a "would go again."
+- **🎟️ Trip Wallet** — flights, rental cars, reservations, tickets,
+  receipts with confirmation numbers and photo/PDF attachments; items
+  dated today surface on the Today screen.
 - **💵 Budget tracker** — total budget, expenses by category, spent /
   remaining / per-traveler math, "where it went" breakdown.
 - **⭐ Worth it?** — three-tap post-visit ratings (money / time / again):

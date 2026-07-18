@@ -140,6 +140,21 @@ CREATE TABLE IF NOT EXISTS expenses (
   spent_on TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS trip_docs (
+  id INTEGER PRIMARY KEY,
+  trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'other',           -- flight | car | hotel | ticket | receipt | other
+  title TEXT NOT NULL,
+  confirmation TEXT NOT NULL DEFAULT '',
+  doc_date TEXT NOT NULL DEFAULT '',
+  doc_time TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  filename TEXT NOT NULL DEFAULT '',
+  original_name TEXT NOT NULL DEFAULT '',
+  mime TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS stop_ratings (
   id INTEGER PRIMARY KEY,
   stop_id INTEGER NOT NULL REFERENCES stops(id) ON DELETE CASCADE,
@@ -161,6 +176,7 @@ try { db.exec("ALTER TABLE trip_members ADD COLUMN departure TEXT NOT NULL DEFAU
 
 const CATEGORIES = ['restaurant', 'coffee', 'hotel', 'overlook', 'park', 'mountains', 'museum', 'shopping', 'hiking', 'beach', 'concert', 'show', 'roadside', 'gem', 'gas', 'rest', 'other'];
 const EXPENSE_CATEGORIES = ['hotel', 'food', 'gas', 'tickets', 'parking', 'shopping', 'other'];
+const DOC_KINDS = ['flight', 'car', 'hotel', 'ticket', 'receipt', 'other'];
 const PRIORITIES = ['must', 'like', 'iftime'];
 const PERMISSIONS = ['edit', 'suggest', 'view'];
 const STATUSES = ['', 'ready', 'here', 'need10', 'hungry', 'bathroom', 'lowenergy', 'quiet', 'skipping', 'gowithout', 'changed'];
@@ -855,6 +871,50 @@ app.delete('/api/expenses/:expId', (req, res) => {
     return res.status(403).json({ error: 'You can only remove expenses you added.' });
   }
   db.prepare('DELETE FROM expenses WHERE id = ?').run(exp.id);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Trip Wallet — flights, rental cars, reservations, tickets, receipts.
+// The paper part of travel, kept where the whole group can find it.
+// ---------------------------------------------------------------------------
+app.get('/api/trips/:id/docs', (req, res) => {
+  const m = requireMember(req, res); if (!m) return;
+  const docs = db.prepare(`
+    SELECT d.*, u.name AS who FROM trip_docs d JOIN users u ON u.id = d.user_id
+    WHERE d.trip_id = ? ORDER BY CASE WHEN d.doc_date = '' THEN 1 ELSE 0 END, d.doc_date, d.doc_time, d.id`).all(req.params.id);
+  res.json({ docs });
+});
+
+app.post('/api/trips/:id/docs', upload.single('file'), (req, res) => {
+  const m = requireMember(req, res); if (!m) return;
+  const b = req.body || {};
+  const title = String(b.title || '').trim().slice(0, 200);
+  if (!title) return res.status(400).json({ error: 'Give it a name — "Flight to Phoenix", "Avis pickup"…' });
+  const kind = DOC_KINDS.includes(b.kind) ? b.kind : 'other';
+  const info = db.prepare(`
+    INSERT INTO trip_docs (trip_id, user_id, kind, title, confirmation, doc_date, doc_time, note, filename, original_name, mime)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(req.params.id, req.user.id, kind, title,
+      String(b.confirmation || '').trim().slice(0, 120),
+      String(b.doc_date || '').slice(0, 10),
+      String(b.doc_time || '').slice(0, 5),
+      String(b.note || '').trim().slice(0, 1000),
+      req.file ? req.file.filename : '',
+      req.file ? req.file.originalname.slice(0, 200) : '',
+      req.file ? req.file.mimetype : '');
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+app.delete('/api/docs/:docId', (req, res) => {
+  const doc = db.prepare('SELECT * FROM trip_docs WHERE id = ?').get(req.params.docId);
+  if (!doc) return res.status(404).json({ error: 'Not found.' });
+  const m = memberOf(doc.trip_id, req.user.id);
+  if (!m || (doc.user_id !== req.user.id && m.role !== 'captain')) {
+    return res.status(403).json({ error: 'You can only remove what you added.' });
+  }
+  if (doc.filename) fs.unlink(path.join(UPLOAD_DIR, doc.filename), () => {});
+  db.prepare('DELETE FROM trip_docs WHERE id = ?').run(doc.id);
   res.json({ ok: true });
 });
 

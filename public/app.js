@@ -475,6 +475,23 @@ async function renderToday(c) {
       <div class="card">${movements.map((x) => `<div class="small" style="padding:3px 0">${x}</div>`).join('')}</div>`);
   }
 
+  // 🎟️ Wallet items dated today — tickets, pickups, check-ins
+  try {
+    const { docs } = await api(`/api/trips/${t.id}/docs`);
+    const docsToday = docs.filter((d) => d.doc_date === day);
+    if (docsToday.length) {
+      body.insertAdjacentHTML('beforeend', `
+        <div class="section-label">🎟️ From the wallet today</div>
+        <div class="card">${docsToday.map((d) => `
+          <div class="small" style="padding:4px 0">
+            ${(DOC_META[d.kind] || DOC_META.other)[0]} <strong>${esc(d.title)}</strong>
+            ${d.doc_time ? ` · ${fmtTime(d.doc_time)}` : ''}
+            ${d.confirmation ? ` · Conf. ${esc(d.confirmation)}` : ''}
+            ${d.filename ? ` · <a href="/covers/${esc(d.filename)}" target="_blank" rel="noopener">📎 open</a>` : ''}
+          </div>`).join('')}</div>`);
+    }
+  } catch { /* wallet is a bonus on this screen */ }
+
   // 📖 Trip's over? The Memory Book awaits.
   if (t.end_date && today > t.end_date) {
     body.insertAdjacentHTML('beforeend', `
@@ -724,8 +741,9 @@ function renderPlan(c) {
   c.innerHTML = `
     ${state.notice ? `<div class="notice">${esc(state.notice)}</div>` : ''}
     ${state.err ? `<div class="err">${esc(state.err)}</div>` : ''}
-    <div class="row" style="margin-bottom:4px">
+    <div class="row" style="margin-bottom:4px;flex-wrap:wrap">
       <button class="btn sm grow" id="aiBtn">✨ Ask the assistant</button>
+      <button class="btn sm quiet" id="walletBtn">🎟️ Wallet</button>
       <button class="btn sm quiet" id="budgetBtn">💵 Budget</button>
       <a class="btn sm quiet" href="/api/trips/${t.id}/export" style="text-decoration:none">Export</a>
     </div>
@@ -737,6 +755,7 @@ function renderPlan(c) {
   state.notice = ''; state.err = '';
 
   document.getElementById('aiBtn').onclick = () => aiModal();
+  document.getElementById('walletBtn').onclick = () => walletModal();
   document.getElementById('budgetBtn').onclick = () => budgetModal();
   if (suggestable) document.getElementById('addStopBtn').onclick = () => stopModal();
 
@@ -1061,6 +1080,89 @@ async function budgetModal() {
       b.onclick = async () => {
         const id = b.closest('[data-exp]').dataset.exp;
         await api(`/api/expenses/${id}`, { method: 'DELETE' });
+        draw();
+      };
+    });
+  }
+  await draw();
+}
+
+// ---------------------------------------------------------------------------
+// 🎟️ Trip Wallet — flights, rental cars, reservations, tickets, receipts
+// ---------------------------------------------------------------------------
+const DOC_META = {
+  flight: ['✈️', 'Flight'], car: ['🚗', 'Rental car'], hotel: ['🏨', 'Hotel reservation'],
+  ticket: ['🎟️', 'Ticket'], receipt: ['🧾', 'Receipt'], other: ['📄', 'Other'],
+};
+
+function docLine(d) {
+  const bits = [];
+  if (d.doc_date) bits.push(fmtDate(d.doc_date, { weekday: 'short', month: 'short', day: 'numeric' }));
+  if (d.doc_time) bits.push(fmtTime(d.doc_time));
+  if (d.confirmation) bits.push(`Conf. ${d.confirmation}`);
+  return bits.join(' · ');
+}
+
+async function walletModal() {
+  const isCaptain = state.trip.me.role === 'captain';
+  const modal = openModal('<h2>🎟️ Trip Wallet</h2><div id="walletBody" class="muted">Opening the wallet…</div>');
+
+  async function draw() {
+    const { docs } = await api(`/api/trips/${state.tripId}/docs`);
+    const body = modal.querySelector('#walletBody');
+    body.classList.remove('muted');
+    const byKind = {};
+    for (const d of docs) (byKind[d.kind] = byKind[d.kind] || []).push(d);
+    body.innerHTML = `
+      <p class="muted small" style="margin-bottom:12px">Flights, rental cars, reservations, tickets, receipts — the paper part of the trip, where the whole group can find it. Snap a photo or attach the PDF.</p>
+      <div class="card">
+        <h3>Add to the wallet</h3>
+        <form id="docForm">
+          <div class="field-row">
+            <div class="field"><label>What is it?</label><select name="kind">
+              ${Object.entries(DOC_META).map(([k, [i, l]]) => `<option value="${k}">${i} ${l}</option>`).join('')}</select></div>
+            <div class="field"><label>Name</label><input name="title" placeholder="Flight to Phoenix" required></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Confirmation #</label><input name="confirmation" placeholder="ABC123"></div>
+            <div class="field"><label>Date</label><input name="doc_date" type="date"></div>
+            <div class="field"><label>Time</label><input name="doc_time" type="time"></div>
+          </div>
+          <div class="field"><label>Notes</label><textarea name="note" placeholder="Gate info, pickup desk, who's on the reservation…" style="min-height:52px"></textarea></div>
+          <div class="field"><label>Attach photo or PDF (optional)</label><input type="file" name="file" accept="image/*,.pdf"></div>
+          <button class="btn full" type="submit">Put it in the wallet</button>
+        </form>
+      </div>
+      ${!docs.length ? '<p class="muted small" style="text-align:center;padding:10px">Nothing in the wallet yet — future-you at the rental counter will thank present-you.</p>' : ''}
+      ${Object.entries(DOC_META).filter(([k]) => byKind[k]).map(([k, [icon, label]]) => `
+        <div class="section-label">${icon} ${label}${byKind[k].length > 1 ? 's' : ''}</div>
+        ${byKind[k].map((d) => `
+          <div class="card" style="padding:12px 14px" data-doc="${d.id}">
+            <div class="spread">
+              <strong>${esc(d.title)}</strong>
+              ${d.user_id === state.me.id || isCaptain ? '<button data-deldoc class="muted">✕</button>' : ''}
+            </div>
+            ${docLine(d) ? `<div class="muted small">${docLine(d)}</div>` : ''}
+            ${d.note ? `<div class="small" style="margin-top:4px;white-space:pre-wrap">${esc(d.note)}</div>` : ''}
+            <div class="muted small" style="margin-top:5px">
+              ${d.filename ? `<a href="/covers/${esc(d.filename)}" target="_blank" rel="noopener">📎 ${esc(d.original_name || 'attachment')}</a> · ` : ''}
+              added by ${esc(firstName(d.who))}
+            </div>
+          </div>`).join('')}`).join('')}`;
+
+    body.querySelector('#docForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const fd = new FormData(form);
+      try {
+        await api(`/api/trips/${state.tripId}/docs`, { method: 'POST', body: fd });
+        draw();
+      } catch (err) { alert(err.message); }
+    };
+    body.querySelectorAll('[data-deldoc]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm('Remove this from the wallet?')) return;
+        await api(`/api/docs/${b.closest('[data-doc]').dataset.doc}`, { method: 'DELETE' });
         draw();
       };
     });

@@ -117,6 +117,13 @@ going and what time do I need to be ready?"*
 - **✨ Ask the assistant** — type things like *"find attractions between
   Kingman and Flagstaff"* or *"great cheap lunch near downtown Nashville"*
   and get real suggestions you can add to the wishlist with one tap.
+- **🎟️ Wallet** — the paper part of the trip, kept where the whole
+  group can find it: flights, rental cars, hotel reservations, tickets,
+  receipts — each with a confirmation number, date/time, notes, and an
+  attached photo or PDF (snap the receipt, attach the boarding pass).
+  Anything dated today also shows up on the Today screen automatically:
+  *"✈️ Southwest to Phoenix · 9:00 AM · Conf. WN4X2K · 📎 open."*
+  Anyone can add; you can delete your own; captains can tidy.
 - **💵 Budget** — set a total budget (captains), and anyone can log
   expenses in seconds: amount, category (hotels, food, gas, tickets,
   parking, shopping), optional note. You get spent / remaining /
